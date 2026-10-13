@@ -1,5 +1,6 @@
 // Build source revision: SHOPDESK_SOURCE_0_4_2_ANALYZER_FIX
 import 'dart:io';
+import 'dart:convert';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -11,6 +12,9 @@ String nowDate() => DateTime.now().toIso8601String().substring(0,10);
 String nowStamp() => DateTime.now().toIso8601String();
 
 const schema = <String>[
+  '''CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)''',
+  '''CREATE TABLE IF NOT EXISTS document_revisions(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES documents(id),changed_at TEXT NOT NULL,old_invoice TEXT NOT NULL,old_date TEXT NOT NULL,old_party_id INTEGER,old_total INTEGER NOT NULL,old_paid INTEGER NOT NULL,old_notes TEXT NOT NULL,old_lines_json TEXT NOT NULL)''',
+  '''CREATE TABLE IF NOT EXISTS receipt_allocations(receipt_id INTEGER NOT NULL REFERENCES receipts(id),document_id INTEGER NOT NULL REFERENCES documents(id),amount INTEGER NOT NULL CHECK(amount>0),PRIMARY KEY(receipt_id,document_id))''',
 '''CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, active INTEGER NOT NULL DEFAULT 1)''',
 '''CREATE TABLE IF NOT EXISTS attributes(id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL REFERENCES categories(id), name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'text', choices TEXT NOT NULL DEFAULT '', UNIQUE(category_id,name))''',
 '''CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL REFERENCES categories(id), name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1)''',
@@ -159,7 +163,25 @@ class Store {
     if(money<0||money>total) throw const FormatException('Paid amount cannot exceed total');
     return db.transaction((t)=>_postDocumentTxn(t,kind,partyId,date,items,paid,paymentAccount,notes));
   }
-  Future<int> _postDocumentTxn(Transaction t,String kind,int? partyId,String date,List<ItemLine> items,double paid,int paymentAccount,String notes) async {
+  /// Atomic invoice numbering. Values are editable by an administrator in Settings.
+  /// Separate counters are maintained for sales and purchases.
+  Future<String> _reserveInvoiceNumber(Transaction t,String kind) async {
+    final prefixKey='invoice_prefix_$kind';
+    final nextKey='invoice_next_$kind';
+    final prefixRows=await t.rawQuery('SELECT value FROM app_settings WHERE key=?',[prefixKey]);
+    final nextRows=await t.rawQuery('SELECT value FROM app_settings WHERE key=?',[nextKey]);
+    final prefix=prefixRows.isEmpty?(kind=='sale'?'SAL':'PUR'):'${prefixRows.first['value']}';
+    var next=int.tryParse(nextRows.isEmpty?'1':'${nextRows.first['value']}')??1;
+    if(next<1)throw const FormatException('Invoice serial must be positive');
+    String invoice;
+    do {
+      invoice='$prefix-${next.toString().padLeft(6,'0')}';
+      next++;
+    } while((await t.rawQuery('SELECT 1 FROM documents WHERE invoice=? LIMIT 1',[invoice])).isNotEmpty);
+    await t.rawInsert('INSERT OR REPLACE INTO app_settings(key,value) VALUES(?,?)',[nextKey,'$next']);
+    return invoice;
+  }
+  Future<int> _postDocumentTxn(Transaction t,String kind,int? partyId,String date,List<ItemLine> items,double paid,int paymentAccount,String notes,{int? existingId,String? existingInvoice}) async {
     // Preconditions rechecked inside correction transactions as well.
     if(!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)||DateTime.tryParse(date)==null)throw const FormatException('Invalid invoice date');
     if(!{'sale','purchase'}.contains(kind)||items.isEmpty)throw const FormatException('Invalid bill or empty items');
@@ -179,8 +201,15 @@ class Store {
             JOIN categories c ON c.id=p.category_id WHERE v.id=? AND v.active=1 AND p.active=1 AND c.active=1''',[x.variantId]);
         if(eligible.isEmpty)throw const FormatException('Product variation is archived or missing');
       }
-      final ref='${kind=='sale'?'SAL':'PUR'}-${DateTime.now().microsecondsSinceEpoch}';
-      final id=await t.rawInsert('INSERT INTO documents(kind,invoice,party_id,date,total,paid,notes) VALUES(?,?,?,?,?,?,?)',[kind,ref,partyId,date,total,money,notes]);
+      final ref=existingInvoice??await _reserveInvoiceNumber(t,kind);
+      final int id;
+      if(existingId!=null){
+        id=existingId;
+        await t.rawUpdate("UPDATE documents SET kind=?,invoice=?,party_id=?,date=?,total=?,paid=?,notes=?,status='POSTED' WHERE id=?",[kind,ref,partyId,date,total,money,notes,id]);
+        await t.rawDelete('DELETE FROM document_lines WHERE document_id=?',[id]);
+      }else{
+        id=await t.rawInsert('INSERT INTO documents(kind,invoice,party_id,date,total,paid,notes) VALUES(?,?,?,?,?,?,?)',[kind,ref,partyId,date,total,money,notes]);
+      }
       for(final x in items){final amount=pennies(x.qty*x.rate);await t.rawInsert('INSERT INTO document_lines(document_id,variant_id,qty,rate,amount) VALUES(?,?,?,?,?)',[id,x.variantId,x.qty,pennies(x.rate),amount]);
         await t.rawInsert('INSERT INTO stock_movements(variant_id,qty,source_type,source_id,date,note) VALUES(?,?,?,?,?,?)',[x.variantId,x.qty*(kind=='sale'?-1:1),kind,id,date,ref]);
       }
@@ -223,15 +252,30 @@ class Store {
       await addJournal(t,'void_$kind',id,date,'Reversal',jl.map((x)=>[x['account_id'] as int,x['credit'] as int,x['debit'] as int]).toList());}
     await audit(t,'VOID',kind,id);
    }
-  /// Atomically correct an invoice: its original stock/ledger is reversed and
-  /// a fresh replacement invoice is posted. If any validation fails, all edits
-  /// roll back together and the original invoice remains posted.
+  /// Corrects the SAME invoice ID/number, not a replacement row.
+  /// Original ledgers/journals stay as audited reversals; prior versions are
+  /// tagged 'superseded_*' to prevent a future void reversing them twice.
   Future<int> reviseDocument(int oldId,String kind,int? partyId,String date,List<ItemLine> items,double paid,int paymentAccount,{String notes=''}) async => db.transaction((t)async{
-    final original=await t.rawQuery("SELECT kind,date FROM documents WHERE id=? AND status='POSTED'",[oldId]);
-    if(original.isEmpty||original.first['kind']!=kind)throw const FormatException('Original posted invoice not found');
-    await _voidDocumentTxn(t,oldId,reversalDate:original.first['date'] as String);
-    final updated=await _postDocumentTxn(t,kind,partyId,date,items,paid,paymentAccount,'Correction of #$oldId. $notes');
-    await audit(t,'REVISE',kind,updated,'Replaces invoice #$oldId');
+    final originals=await t.rawQuery("SELECT * FROM documents WHERE id=? AND status='POSTED'",[oldId]);
+    if(originals.isEmpty||originals.first['kind']!=kind)throw const FormatException('Posted invoice not found');
+    final original=originals.first;
+    final oldLines=await t.rawQuery('SELECT variant_id,qty,rate,amount FROM document_lines WHERE document_id=? ORDER BY id',[oldId]);
+    final oldReturns=await t.rawQuery('''SELECT 1 FROM return_lines rl JOIN document_lines dl ON dl.id=rl.source_line_id WHERE dl.document_id=? LIMIT 1''',[oldId]);
+    if(oldReturns.isNotEmpty)throw const FormatException('This invoice has return history. Contact administrator for a separate adjustment; invoice lines cannot be replaced.');
+    await t.rawInsert('''INSERT INTO document_revisions(document_id,changed_at,old_invoice,old_date,old_party_id,old_total,old_paid,old_notes,old_lines_json)
+      VALUES(?,?,?,?,?,?,?,?,?)''',[oldId,nowStamp(),original['invoice'],original['date'],original['party_id'],original['total'],original['paid'],original['notes'],jsonEncode(oldLines)]);
+    await _voidDocumentTxn(t,oldId,reversalDate:original['date'] as String);
+    // Mark the old version's entries so subsequent corrections/voids only
+    // reverse the currently posted version.
+    for(final source in ['sale','purchase','sale_payment','purchase_payment']){
+      await t.rawUpdate('UPDATE party_ledger SET source_type=? WHERE source_id=? AND source_type=?',
+        ['superseded_$source',oldId,source]);
+    }
+    await t.rawUpdate('UPDATE journal SET source_type=? WHERE source_id=? AND source_type=?',
+      ['superseded_$kind',oldId,kind]);
+    final updated=await _postDocumentTxn(t,kind,partyId,date,items,paid,paymentAccount,notes,
+      existingId:oldId,existingInvoice:original['invoice'] as String);
+    await audit(t,'REVISE',kind,oldId,'Updated invoice ${original['invoice']} in place');
     return updated;
   });
   Future<void> recordPayment(int partyId,double amount,int accountId,String note) async {

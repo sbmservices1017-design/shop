@@ -16,9 +16,9 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const ShopDesk());
 }
-const ink=Color(0xFF19243A);
+const ink=Color(0xFF142B46);
 const blue=Color(0xFF4B63D9);
-const bg=Color(0xFFF5F7FB);
+const bg=Color(0xFFF5F9FF);
 String activeShopModule='Dashboard';
 bool canShopAction(String action)=>CommercialCore.instance.current?.allowed(activeShopModule,action)==true;
 String rs(Object? v)=>'Rs. ${NumberFormat('#,##0.00').format(numVal(v))}';
@@ -28,7 +28,9 @@ class ShopDesk extends StatelessWidget {
   const ShopDesk({super.key});
   @override Widget build(BuildContext context)=>MaterialApp(
     title:'ShopDesk — Offline ERP',debugShowCheckedModeBanner:false,
-    theme:ThemeData(useMaterial3:true,colorScheme:ColorScheme.fromSeed(seedColor:blue,brightness:Brightness.light),scaffoldBackgroundColor:bg,
+    scrollBehavior: const MaterialScrollBehavior().copyWith(scrollbars:true),
+    theme:ThemeData(useMaterial3:true,textTheme:ThemeData.light().textTheme.apply(bodyColor:ink,displayColor:ink),colorScheme:ColorScheme.fromSeed(seedColor:blue,brightness:Brightness.light),scaffoldBackgroundColor:bg,
+      scrollbarTheme:ScrollbarThemeData(thumbVisibility:WidgetStateProperty.all(true),trackVisibility:WidgetStateProperty.all(true),thickness:WidgetStateProperty.all(11),radius:const Radius.circular(8),thumbColor:WidgetStateProperty.all(const Color(0xFF6F9ACD)),trackColor:WidgetStateProperty.all(const Color(0xFFE2EEFC))),
       cardTheme:CardThemeData(color:Colors.white,elevation:0,shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(18))),
       inputDecorationTheme:InputDecorationTheme(filled:true,fillColor:Colors.white,contentPadding:const EdgeInsets.symmetric(horizontal:14,vertical:14),
         border:OutlineInputBorder(borderRadius:BorderRadius.circular(10),borderSide:const BorderSide(color:Color(0xFFE2E7F0))),
@@ -78,39 +80,60 @@ class Shell extends StatefulWidget {const Shell({super.key});@override State<She
 class _ShellState extends State<Shell> {
   int page=0;int revision=0;
   final menu=<({String label,IconData icon})>[
-    (label:'Dashboard',icon:Icons.dashboard_rounded),(label:'Products & Variants',icon:Icons.inventory_2_outlined),
-    (label:'Categories & Fields',icon:Icons.category_outlined),(label:'Stock & Adjustments',icon:Icons.warehouse_outlined),
-    (label:'Sales / Billing',icon:Icons.point_of_sale_rounded),(label:'Purchases',icon:Icons.shopping_cart_checkout_rounded),(label:'Returns & Refunds',icon:Icons.assignment_return_outlined),
-    (label:'Customers',icon:Icons.people_outline),(label:'Suppliers',icon:Icons.local_shipping_outlined),
-    (label:'Expenses',icon:Icons.payments_outlined),(label:'Employees & Payroll',icon:Icons.badge_outlined),
-    (label:'Accounts & Journal',icon:Icons.account_balance_outlined),(label:'Reports / Export',icon:Icons.analytics_outlined),
-    (label:'Settings & Backup',icon:Icons.settings_outlined)];
+    (label:'Dashboard',icon:Icons.dashboard_rounded),
+    (label:'POS',icon:Icons.point_of_sale_rounded),
+    (label:'Sales Invoices',icon:Icons.receipt_long_outlined),
+    (label:'Sale Returns',icon:Icons.assignment_return_outlined),
+    (label:'Purchase Invoices',icon:Icons.shopping_cart_outlined),
+    (label:'Purchase Returns',icon:Icons.keyboard_return_outlined),
+    (label:'Products & Variants',icon:Icons.inventory_2_outlined),
+    (label:'Categories & Fields',icon:Icons.category_outlined),
+    (label:'Stock & Adjustments',icon:Icons.warehouse_outlined),
+    (label:'Customers',icon:Icons.people_outline),
+    (label:'Suppliers',icon:Icons.local_shipping_outlined),
+    (label:'Expenses',icon:Icons.payments_outlined),
+    (label:'Employees & Payroll',icon:Icons.badge_outlined),
+    (label:'Accounts & Journal',icon:Icons.account_balance_outlined),
+    (label:'Reports / Export',icon:Icons.analytics_outlined),
+    (label:'Settings & Backup',icon:Icons.settings_outlined)
+  ];
+  String moduleKey(int i)=>switch(i){
+    1||2=>'Sales / Billing',3||5=>'Returns & Refunds',4=>'Purchases',
+    _=>menu[i].label
+  };
   void refresh(){if(mounted)setState(()=>revision++);}
   Future<void> correctPostedInvoice(String kind,int id)async{
     final ok=await showDialog<bool>(context:context,builder:(ctx)=>InvoiceDialog(kind:kind,existingId:id));
     if(ok==true)refresh();
   }
-  Widget screen(){activeShopModule=menu[page].label;return switch(page){
-    0=>AdvancedDashboard(revision:revision),1=>ProductsScreen(onChange:refresh),2=>CategoriesScreen(onChange:refresh),
-    3=>StockScreen(onChange:refresh),4=>ModernPosScreen(kind:'sale',onChange:refresh,onCorrectInvoice:(id)=>correctPostedInvoice('sale',id)),5=>ModernPosScreen(kind:'purchase',onChange:refresh,onCorrectInvoice:(id)=>correctPostedInvoice('purchase',id)),
-    6=>ReturnScreen(onChange:refresh),7=>PartiesScreen(kind:'customer',onChange:refresh),8=>PartiesScreen(kind:'supplier',onChange:refresh),
-    9=>ExpenseScreen(onChange:refresh),10=>EmployeeScreen(onChange:refresh),11=>AccountsScreen(onChange:refresh),
-    12=>ReportsScreen(revision:revision),_=>const SettingsHub()};}
+  Widget screen(){activeShopModule=moduleKey(page);return switch(page){
+    0=>AdvancedDashboard(revision:revision),
+    1=>PosWorkspace(onChange:refresh),
+    2=>DocumentScreen(kind:'sale',onChange:refresh),
+    3=>ReturnScreen(kind:'sale',onChange:refresh),
+    4=>DocumentScreen(kind:'purchase',onChange:refresh),
+    5=>ReturnScreen(kind:'purchase',onChange:refresh),
+    6=>ProductsScreen(onChange:refresh),7=>CategoriesScreen(onChange:refresh),
+    8=>StockScreen(onChange:refresh),9=>PartiesScreen(kind:'customer',onChange:refresh),
+    10=>PartiesScreen(kind:'supplier',onChange:refresh),
+    11=>ExpenseScreen(onChange:refresh),12=>EmployeeScreen(onChange:refresh),
+    13=>AccountsScreen(onChange:refresh),14=>ReportsScreen(revision:revision),
+    _=>const SettingsHub()};}
   Future<void> searchModules(List<int> available) async {
     final chosen=await showSearch<int?>(context:context,delegate:_ModuleSearchDelegate(menu,available));
     if(chosen!=null && mounted)setState(()=>page=chosen);
   }
   @override Widget build(BuildContext context){
     final core=CommercialCore.instance;
-    final available=[for(var i=0;i<menu.length;i++)if(core.current?.allowed(menu[i].label,'view')==true)i];
+    final available=[for(var i=0;i<menu.length;i++)if(core.current?.allowed(moduleKey(i),'view')==true)i];
     if(available.isEmpty)return Scaffold(body:Center(child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[const Text('No modules assigned to this account.'),TextButton(onPressed:core.signOut,child:const Text('Sign out'))])));
     if(!available.contains(page))page=available.first;
-    final dark=page==0;
+    final dark=false;
     return Scaffold(backgroundColor:dark?Nexa.background:bg,body:Row(children:[
       Container(width:237,decoration:const BoxDecoration(color:Nexa.sidebar,border:Border(right:BorderSide(color:Nexa.outline))),child:Column(children:[
         Padding(padding:const EdgeInsets.fromLTRB(23,23,12,29),child:Row(children:[
           Container(padding:const EdgeInsets.all(8),decoration:BoxDecoration(gradient:Nexa.blueGradient,borderRadius:BorderRadius.circular(9)),child:const Icon(Icons.layers_rounded,color:Colors.white,size:23)),
-          const SizedBox(width:13),const Text('ShopDesk',style:TextStyle(color:Colors.white,fontWeight:FontWeight.w800,fontSize:20)),
+          const SizedBox(width:13),const Text('ShopDesk',style:TextStyle(color:Nexa.white,fontWeight:FontWeight.w800,fontSize:20)),
           const Padding(padding:EdgeInsets.only(left:5,top:5),child:Text('PRO',style:TextStyle(color:Nexa.brightBlue,fontWeight:FontWeight.w800,fontSize:9))),
         ])),
         Expanded(child:ListView(padding:const EdgeInsets.symmetric(horizontal:16),children:[
@@ -118,7 +141,7 @@ class _ShellState extends State<Shell> {
             color:Colors.transparent,child:InkWell(borderRadius:BorderRadius.circular(9),onTap:()=>setState(()=>page=i),child:Container(
               height:45,padding:const EdgeInsets.symmetric(horizontal:13),decoration:BoxDecoration(
                 gradient:i==page?Nexa.blueGradient:null,borderRadius:BorderRadius.circular(9)),
-              child:Row(children:[Icon(menu[i].icon,size:19,color:i==page?Nexa.white:Nexa.secondary),const SizedBox(width:14),Expanded(child:Text(menu[i].label,maxLines:1,overflow:TextOverflow.ellipsis,style:TextStyle(color:i==page?Nexa.white:Nexa.muted,fontSize:12,fontWeight:i==page?FontWeight.w700:FontWeight.w500)))]),
+              child:Row(children:[Icon(menu[i].icon,size:19,color:i==page?Colors.white:Nexa.secondary),const SizedBox(width:14),Expanded(child:Text(menu[i].label,maxLines:1,overflow:TextOverflow.ellipsis,style:TextStyle(color:i==page?Colors.white:Nexa.muted,fontSize:13,fontWeight:i==page?FontWeight.w700:FontWeight.w500)))]),
             ))) )
         ])),
         Padding(padding:const EdgeInsets.fromLTRB(15,12,15,12),child:NexaPanel(padding:const EdgeInsets.all(13),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
@@ -132,7 +155,7 @@ class _ShellState extends State<Shell> {
           Expanded(child:Text(menu[page].label,style:TextStyle(fontSize:18,color:dark?Nexa.white:ink,fontWeight:FontWeight.w800))),
           TextButton.icon(onPressed:()=>searchModules(available),icon:Icon(Icons.search,size:18,color:dark?Nexa.muted:ink),label:Text('Search modules...',style:TextStyle(fontSize:12,color:dark?Nexa.muted:ink))),
           const SizedBox(width:9),IconButton(tooltip:'Refresh',onPressed:refresh,icon:Icon(Icons.refresh,size:19,color:dark?Nexa.muted:ink)),
-          const SizedBox(width:8),if(dark)const LicenseCountdown(compact:true),const SizedBox(width:8),Container(width:1,height:26,color:dark?Nexa.outline:const Color(0xFFE3E7F0)),const SizedBox(width:12),
+          const SizedBox(width:8),const LicenseCountdown(compact:true),const SizedBox(width:8),Container(width:1,height:26,color:dark?Nexa.outline:const Color(0xFFE3E7F0)),const SizedBox(width:12),
           const Icon(Icons.account_circle_outlined,color:Nexa.brightBlue,size:29),const SizedBox(width:9),
           Text(core.current?.username??'',style:TextStyle(color:dark?Nexa.white:ink,fontWeight:FontWeight.w700,fontSize:12)),
           IconButton(tooltip:'Sign out',onPressed:core.signOut,icon:Icon(Icons.logout,size:18,color:dark?Nexa.muted:ink)),
@@ -141,6 +164,26 @@ class _ShellState extends State<Shell> {
       ])),
     ]));
   }
+}
+
+
+class PosWorkspace extends StatefulWidget {
+  final VoidCallback onChange;
+  const PosWorkspace({super.key,required this.onChange});
+  @override State<PosWorkspace> createState()=>_PosWorkspaceState();
+}
+class _PosWorkspaceState extends State<PosWorkspace> {
+  String kind='sale';
+  @override Widget build(BuildContext context)=>Column(children:[
+    Padding(padding:const EdgeInsets.fromLTRB(20,14,20,0),child:Row(children:[
+      const Text('Point of Sale',style:TextStyle(fontSize:19,fontWeight:FontWeight.w800)),const Spacer(),
+      SegmentedButton<String>(segments:const [
+        ButtonSegment(value:'sale',label:Text('Sales POS'),icon:Icon(Icons.sell_outlined)),
+        ButtonSegment(value:'purchase',label:Text('Purchase POS'),icon:Icon(Icons.local_shipping_outlined))
+      ],selected:{kind},onSelectionChanged:(values)=>setState(()=>kind=values.first)),
+    ])),
+    Expanded(child:ModernPosScreen(key:ValueKey(kind),kind:kind,onChange:widget.onChange)),
+  ]);
 }
 
 class _ModuleSearchDelegate extends SearchDelegate<int?> {
@@ -160,13 +203,22 @@ Widget section(String title,{Widget? action})=>Padding(padding:const EdgeInsets.
 Widget addButton(String label,VoidCallback onTap)=>FilledButton.icon(onPressed:canShopAction('create')?onTap:null,icon:const Icon(Icons.add,size:17),label:Text(label));
 Widget pageWrap(List<Widget> children)=>SingleChildScrollView(padding:const EdgeInsets.all(25),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:children));
 Widget panel(Widget child)=>Card(child:Padding(padding:const EdgeInsets.all(19),child:child));
-Widget listing(List<String> headers,List<List<Widget>> rows){
-  return panel(SingleChildScrollView(scrollDirection:Axis.horizontal,child:DataTable(
-    headingRowHeight:47,dataRowMinHeight:47,dataRowMaxHeight:80,columnSpacing:24,
-    columns:headers.map((h)=>DataColumn(label:Text(h,style:const TextStyle(fontWeight:FontWeight.w700,fontSize:12)))).toList(),
-    rows:rows.map((r)=>DataRow(cells:r.map((w)=>DataCell(w)).toList())).toList())));
+Widget listing(List<String> headers,List<List<Widget>> rows)=>panel(_WideTable(headers:headers,rows:rows));
+class _WideTable extends StatefulWidget{
+  final List<String> headers;final List<List<Widget>> rows;
+  const _WideTable({required this.headers,required this.rows});
+  @override State<_WideTable> createState()=>_WideTableState();
 }
-Widget txt(Object? s)=>Text('${s??''}',style:const TextStyle(fontSize:12));
+class _WideTableState extends State<_WideTable>{
+  final ScrollController controller=ScrollController();
+  @override void dispose(){controller.dispose();super.dispose();}
+  @override Widget build(BuildContext context)=>Scrollbar(controller:controller,thumbVisibility:true,trackVisibility:true,thickness:11,
+    child:SingleChildScrollView(controller:controller,scrollDirection:Axis.horizontal,child:DataTable(
+      headingRowHeight:47,dataRowMinHeight:47,dataRowMaxHeight:80,columnSpacing:24,
+      columns:widget.headers.map((h)=>DataColumn(label:Text(h,style:const TextStyle(fontWeight:FontWeight.w700,fontSize:12)))).toList(),
+      rows:widget.rows.map((r)=>DataRow(cells:r.map((w)=>DataCell(w)).toList())).toList())));
+}
+Widget txt(Object? s)=>Text('${s??''}',style:const TextStyle(fontSize:13));
 Widget buttons(List<Widget> widgets)=>Wrap(spacing:6,children:widgets);
 Widget small(String s,VoidCallback tap,{IconData icon=Icons.edit_outlined}){
   final title=s.toLowerCase();
@@ -270,6 +322,14 @@ class _StockScreenState extends State<StockScreen>{final s=Store.instance;
 
 class DocumentScreen extends StatefulWidget {final String kind;final VoidCallback onChange;const DocumentScreen({super.key,required this.kind,required this.onChange});@override State<DocumentScreen> createState()=>_DocumentScreenState();}
 class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
+  String term='',paymentFilter='All';
+  final searchController=TextEditingController();
+  late Future<List<Map<String,Object?>>> invoiceFuture;
+  @override void initState(){super.initState();invoiceFuture=loadInvoices();}
+  Future<List<Map<String,Object?>>> loadInvoices()=>s.read('''SELECT d.*,coalesce(p.name,'Walk-in') AS party FROM documents d
+    LEFT JOIN parties p ON p.id=d.party_id WHERE d.kind=? ORDER BY d.id DESC LIMIT 500''',[widget.kind]);
+  @override void dispose(){searchController.dispose();super.dispose();}
+
   Future<void> create([int? existing]) async {final ok=await showDialog<bool>(context:context,builder:(ctx)=>InvoiceDialog(kind:widget.kind,existingId:existing));if(ok==true)widget.onChange();}
   Future<void> voidIt(int id)async{try{if(await confirm(context,'Void invoice? Stock, balances and journal entries will be reversed.')){await s.voidDocument(id);widget.onChange();}}catch(e){if(mounted)await showError(context,e);}}
   Future<void> previewInvoice(Map<String,Object?> row)async{
@@ -279,27 +339,50 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
       await showDialog(context:context,builder:(ctx)=>AlertDialog(title:Text('${row['invoice']}  |  ${row['party']}'),content:SizedBox(width:640,child:Column(mainAxisSize:MainAxisSize.min,children:[listing(rpt.headings,rpt.rows.map((r)=>r.map((v)=>txt(v)).toList()).toList()),Text('Total: ${funds(row['total'])}     Paid: ${funds(row['paid'])}')])) ,actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close')),OutlinedButton.icon(onPressed:()=>Exports.pdf(rpt),icon:const Icon(Icons.picture_as_pdf),label:const Text('PDF')),FilledButton.icon(onPressed:()=>Exports.pdf(rpt,print:true),icon:const Icon(Icons.print),label:const Text('A4 Print'))]));
     }catch(e){if(mounted)await showError(context,e);}
   }
-  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read('''SELECT d.*,coalesce(p.name,'Walk-in') AS party FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE d.kind=? ORDER BY d.id DESC LIMIT 300''',[widget.kind]),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
-    return pageWrap([section(widget.kind=='sale'?'Sales & manual billing':'Purchases & supplier invoices',action:addButton(widget.kind=='sale'?'New bill':'New purchase',()=>create())),
-      panel(Text(widget.kind=='sale'?'Prices are manually entered on each bill. Zero/negative stock is allowed.':'Purchases automatically increase stock, even when previously negative.',style:const TextStyle(color:Colors.blueGrey))),
-      listing(['Date','Invoice','Party','Total','Paid','Balance','Status','Actions'],snap.data!.map((r)=>[
-        txt(r['date']),txt(r['invoice']),txt(r['party']),txt(funds(r['total'])),txt(funds(r['paid'])),txt(funds((r['total'] as int)-(r['paid'] as int))),txt(r['status']),buttons([
-          small('View / Print A4',()=>previewInvoice(r),icon:Icons.print_outlined),
-          if(r['status']=='POSTED')small('Correct invoice',()=>create(r['id'] as int),icon:Icons.edit_note_outlined),
-          if(r['status']=='POSTED')small('Void',()=>voidIt(r['id'] as int),icon:Icons.block)])]).toList())]);
-  });
+  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(
+    future:invoiceFuture,
+    builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
+      final search=term.trim().toLowerCase();
+      final filtered=snap.data!.where((r){
+        if(search.isNotEmpty&&!('${r['invoice']} ${r['party']}'.toLowerCase().contains(search)))return false;
+        final total=numVal(r['total']),paid=numVal(r['paid']);
+        final status=paid>=total?'Paid':paid>0?'Partially Paid':'Unpaid';
+        return paymentFilter=='All'||paymentFilter==status;
+      }).toList();
+      return pageWrap([
+        section(widget.kind=='sale'?'Sales Invoices':'Purchase Invoices'),
+        panel(Wrap(spacing:14,runSpacing:12,crossAxisAlignment:WrapCrossAlignment.center,children:[
+          SizedBox(width:360,child:TextField(controller:searchController,decoration:const InputDecoration(prefixIcon:Icon(Icons.search),labelText:'Search invoice number or customer / supplier'),onChanged:(value)=>setState(()=>term=value))),
+          SizedBox(width:205,child:DropdownButtonFormField<String>(key:ValueKey(paymentFilter),initialValue:paymentFilter,decoration:const InputDecoration(labelText:'Payment status'),items:['All','Paid','Unpaid','Partially Paid'].map((v)=>DropdownMenuItem(value:v,child:Text(v))).toList(),onChanged:(value)=>setState(()=>paymentFilter=value??'All'))),
+          OutlinedButton.icon(onPressed:(){searchController.clear();setState((){term='';paymentFilter='All';});},icon:const Icon(Icons.filter_alt_off),label:const Text('Clear Filters')),
+          Text('${filtered.length} invoices',style:const TextStyle(fontWeight:FontWeight.w700,color:ink)),
+        ])),
+        listing(['Date','Invoice Number','Customer / Supplier','Total','Paid','Balance','Payment Status','Invoice Status','Actions'],filtered.map((r){
+          final total=numVal(r['total']),paid=numVal(r['paid']);
+          final paymentStatus=paid>=total?'Paid':paid>0?'Partially Paid':'Unpaid';
+          return [txt(r['date']),txt(r['invoice']),txt(r['party']),txt(funds(r['total'])),txt(funds(r['paid'])),txt(funds(total-paid)),
+            Text(paymentStatus,style:TextStyle(color:paymentStatus=='Paid'?const Color(0xFF16865B):const Color(0xFFBA651A),fontWeight:FontWeight.w800)),
+            txt(r['status']),buttons([
+              small('View / Print A4',()=>previewInvoice(r),icon:Icons.print_outlined),
+              if(r['status']=='POSTED')small('Correct invoice',()=>create(r['id'] as int),icon:Icons.edit_note_outlined),
+              if(r['status']=='POSTED')small('Void',()=>voidIt(r['id'] as int),icon:Icons.block)
+            ])];
+        }).toList()),
+      ]);
+    });
+
 }
 
 
 /// Stock returns, with per-invoice-line quantities and cash/credit refunds.
-class ReturnScreen extends StatefulWidget {final VoidCallback onChange;const ReturnScreen({super.key,required this.onChange});
+class ReturnScreen extends StatefulWidget {final VoidCallback onChange;final String kind;const ReturnScreen({super.key,required this.kind,required this.onChange});
   @override State<ReturnScreen> createState()=>_ReturnScreenState();}
 class _ReturnScreenState extends State<ReturnScreen>{final s=Store.instance;
   Future<void> change(Future<void> Function() action)async{
     try{await action();widget.onChange();}catch(e){if(mounted)await showError(context,e);}
   }
   Future<void> add()async{
-    final docs=await s.read("SELECT d.id,d.invoice,d.kind,coalesce(p.name,'Walk-in') AS party FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE d.status='POSTED' ORDER BY d.id DESC LIMIT 300");
+    final docs=await s.read("SELECT d.id,d.invoice,d.kind,coalesce(p.name,'Walk-in') AS party FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE d.status='POSTED' AND d.kind=? ORDER BY d.id DESC LIMIT 300",[widget.kind]);
     if(docs.isEmpty)throw const FormatException('Create a sale or purchase first');
     if(!mounted)return;
     final choice=await ask(context,'Select original sale / purchase',[FieldSpec('doc','Invoice',choices:{for(final d in docs)d['id'] as int:'${d['invoice']} • ${d['party']}'})]);
@@ -324,9 +407,9 @@ class _ReturnScreenState extends State<ReturnScreen>{final s=Store.instance;
   }
   @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read('''
     SELECT r.*,d.invoice,d.kind,coalesce(p.name,'Walk-in') AS party FROM document_returns r
-    JOIN documents d ON d.id=r.document_id LEFT JOIN parties p ON p.id=d.party_id ORDER BY r.id DESC LIMIT 300
-  '''),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
-    return pageWrap([section('Sales returns & purchase returns',action:addButton('New return',()=>change(add))),
+    JOIN documents d ON d.id=r.document_id LEFT JOIN parties p ON p.id=d.party_id WHERE d.kind=? ORDER BY r.id DESC LIMIT 300
+  ''',[widget.kind]),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
+    return pageWrap([section(widget.kind=='sale'?'Sale Returns':'Purchase Returns',action:addButton('New return',()=>change(add))),
       panel(const Text('Returning a sold item adds stock; returning a purchased item subtracts stock. Partial quantities and refunds are permitted. Posted returns can be reversed with a full audit trail.',style:TextStyle(color:Colors.blueGrey))),
       listing(['Date','Original invoice','Type','Customer / Supplier','Return Value','Cash Refund','Status','Action'],snap.data!.map((r)=>[
         txt(r['date']),txt(r['invoice']),txt(r['kind']),txt(r['party']),txt(funds(r['amount'])),txt(funds(r['refunded'])),txt(r['status']),
@@ -398,7 +481,7 @@ class _InvoiceDialogState extends State<InvoiceDialog>{
         const SizedBox(width:12),Expanded(child:TextField(controller:paid,decoration:const InputDecoration(labelText:'Paid now (Rs.)'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){})))]),
       const SizedBox(height:12),TextField(controller:notes,decoration:const InputDecoration(labelText:'Notes (optional)')),
       const SizedBox(height:10),const Text('Credit/partial sales require a customer. Negative stock will not block posting.',style:TextStyle(fontSize:11,color:Colors.blueGrey))])),
-    if(widget.existingId!=null)const Text('Saving creates a corrected invoice and voids the original atomically. Old history remains available.',style:TextStyle(fontSize:11,color:Colors.blueGrey)),
+    if(widget.existingId!=null)const Text('Saving updates this same invoice number and ID. Prior stock and ledger entries remain in audit history.',style:TextStyle(fontSize:11,color:Colors.blueGrey)),
     const Divider(),Row(children:[Text('Grand Total    ${rs(total)}',style:const TextStyle(fontSize:21,color:ink,fontWeight:FontWeight.w900)),const Spacer(),TextButton(onPressed:()=>Navigator.pop(context),child:const Text('Cancel')),const SizedBox(width:12),FilledButton.icon(onPressed:submitting?null:submit,icon:const Icon(Icons.check),label:Text(submitting?'Saving…':'Post & Update Stock'))])]))));}
 }
 class _DraftLine {int variant;final qty=TextEditingController();final rate=TextEditingController();_DraftLine(this.variant,{String quantity='1',String price='0'}){qty.text=quantity;rate.text=price;}void dispose(){qty.dispose();rate.dispose();}}

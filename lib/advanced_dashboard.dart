@@ -17,6 +17,14 @@ class AdvancedDashboard extends StatefulWidget {
 class _AdvancedDashboardState extends State<AdvancedDashboard> {
   Timer? ticker;
   int rangeDays = 30;
+  DateTimeRange? selectedRange;
+  DateTime get effectiveStart => selectedRange?.start ?? DateTime.now().subtract(Duration(days:rangeDays-1));
+  DateTime get effectiveEnd => selectedRange?.end ?? DateTime.now();
+  Future<void> chooseDates() async {
+    final now=DateTime.now();
+    final selected=await showDateRangePicker(context:context,firstDate:DateTime(2000),lastDate:DateTime(now.year+5),initialDateRange:selectedRange??DateTimeRange(start:now.subtract(const Duration(days:29)),end:now),helpText:'Dashboard data date filter');
+    if(selected!=null && mounted){setState((){selectedRange=selected;results=load();});}
+  }
   late Future<List<List<Map<String, Object?>>>> results;
   final colors = const [Nexa.brightBlue, Nexa.purple, Nexa.orange, Nexa.green, Nexa.pink];
 
@@ -36,8 +44,8 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
   Future<List<List<Map<String, Object?>>>> load() async {
     final s = Store.instance;
     final now = DateTime.now();
-    final since = DateFormat('yyyy-MM-dd').format(now.subtract(Duration(days: rangeDays - 1)));
-    final until = DateFormat('yyyy-MM-dd').format(now);
+    final since = DateFormat('yyyy-MM-dd').format(effectiveStart);
+    final until = DateFormat('yyyy-MM-dd').format(effectiveEnd);
     return Future.wait([
       s.read("SELECT coalesce(sum(total),0) n FROM documents WHERE kind='sale' AND date>=? AND date<=? AND status='POSTED'",[since,until]),
       s.read("SELECT coalesce(sum(total),0) n FROM documents WHERE kind='purchase' AND date>=? AND date<=? AND status='POSTED'",[since,until]),
@@ -47,10 +55,10 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
       s.read("SELECT coalesce(sum(CASE WHEN p.kind='supplier' THEN l.credit-l.debit ELSE 0 END),0) n FROM party_ledger l JOIN parties p ON p.id=l.party_id"),
       s.read("SELECT coalesce(sum(e.amount),0) n FROM expenses e WHERE e.date>=? AND e.date<=? AND NOT EXISTS (SELECT 1 FROM reversed_transactions r WHERE r.kind='expense' AND r.source_id=e.id)",[since,until]),
       s.read("SELECT date,kind,sum(total) total FROM documents WHERE status='POSTED' AND date>=? AND date<=? GROUP BY date,kind ORDER BY date",[since,until]),
-      s.read("SELECT d.invoice,d.date,d.kind,d.total,d.paid,coalesce(p.name,'Walk-in') party FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE d.status='POSTED' ORDER BY d.id DESC LIMIT 6"),
+      s.read("SELECT d.invoice,d.date,d.kind,d.total,d.paid,coalesce(p.name,'Walk-in') party FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE d.status='POSTED' AND d.date>=? AND d.date<=? ORDER BY d.id DESC LIMIT 6",[since,until]),
       s.read('SELECT c.name name,coalesce(sum(m.qty),0) qty FROM categories c JOIN products p ON p.category_id=c.id JOIN variants v ON v.product_id=p.id LEFT JOIN stock_movements m ON m.variant_id=v.id GROUP BY c.id ORDER BY abs(qty) DESC LIMIT 6'),
       s.read("SELECT c.name name,coalesce(sum(e.amount),0) amount FROM expenses e JOIN expense_categories c ON e.category_id=c.id WHERE e.date>=? AND e.date<=? AND NOT EXISTS (SELECT 1 FROM reversed_transactions r WHERE r.kind='expense' AND r.source_id=e.id) GROUP BY c.id ORDER BY amount DESC LIMIT 6",[since,until]),
-      s.read("SELECT CASE WHEN paid>=total THEN 'Paid' WHEN paid>0 THEN 'Partially Paid' ELSE 'Unpaid' END status,count(*) n FROM documents WHERE kind='sale' AND status='POSTED' GROUP BY 1"),
+      s.read("SELECT CASE WHEN paid>=total THEN 'Paid' WHEN paid>0 THEN 'Partially Paid' ELSE 'Unpaid' END status,count(*) n FROM documents WHERE kind='sale' AND status='POSTED' AND date>=? AND date<=? GROUP BY 1",[since,until]),
       s.read("SELECT p.name name,coalesce(sum(l.qty),0) qty,coalesce(sum(l.amount),0) revenue FROM document_lines l JOIN documents d ON d.id=l.document_id JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id WHERE d.kind='sale' AND d.status='POSTED' AND d.date>=? AND d.date<=? GROUP BY p.id ORDER BY qty DESC LIMIT 5",[since,until]),
       s.read("SELECT count(*) n FROM documents WHERE kind='sale' AND date>=? AND date<=? AND status='POSTED'",[since,until]),
       s.read("SELECT c.name name,coalesce(sum(l.amount),0) amount FROM document_lines l JOIN documents d ON d.id=l.document_id JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id JOIN categories c ON c.id=p.category_id WHERE d.kind='sale' AND d.status='POSTED' AND d.date>=? AND d.date<=? GROUP BY c.id ORDER BY amount DESC LIMIT 5",[since,until]),
@@ -75,14 +83,14 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
         const SizedBox(height:8),
         FittedBox(fit:BoxFit.scaleDown,alignment:Alignment.centerLeft,child:Text(value,style:const TextStyle(color:Nexa.white,fontSize:25,fontWeight:FontWeight.w800))),
         const Spacer(),
-        Text(note,style:const TextStyle(color:Nexa.secondary,fontSize:11),overflow:TextOverflow.ellipsis),
+        Text(note,style:const TextStyle(color:Nexa.secondary,fontSize:12),overflow:TextOverflow.ellipsis),
       ])),
       const Icon(Icons.more_horiz,color:Nexa.secondary,size:17),
     ])));
 
   Widget panel(String title,Widget body,{String? description})=>NexaPanel(
     child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-      sectionTitle(title),if(description!=null)...[const SizedBox(height:5),Text(description,style:const TextStyle(color:Nexa.secondary,fontSize:11))],
+      sectionTitle(title),if(description!=null)...[const SizedBox(height:5),Text(description,style:const TextStyle(color:Nexa.secondary,fontSize:12))],
       const SizedBox(height:18),body,
     ]),
   );
@@ -104,14 +112,14 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
       final horizontal=c.maxWidth>390;
       final chart=SizedBox(width:200,height:200,child:Stack(alignment:Alignment.center,children:[
         CustomPaint(size:const Size(200,200),painter:_DonutPainter(categories.map((e)=>numVal(e['amount'])).toList(),colors)),
-        Column(mainAxisSize:MainAxisSize.min,children:[Text(money(sum),style:const TextStyle(color:Nexa.white,fontWeight:FontWeight.w800,fontSize:17)),const Text('Total Sales',style:TextStyle(color:Nexa.muted,fontSize:11))]),
+        Column(mainAxisSize:MainAxisSize.min,children:[Text(money(sum),style:const TextStyle(color:Nexa.white,fontWeight:FontWeight.w800,fontSize:17)),const Text('Total Sales',style:TextStyle(color:Nexa.muted,fontSize:12))]),
       ]));
       final legend=Column(mainAxisAlignment:MainAxisAlignment.center,crossAxisAlignment:CrossAxisAlignment.stretch,children:[
         if(categories.isEmpty)const Text('No sales yet',style:TextStyle(color:Nexa.muted,fontSize:12)),
         for(var i=0;i<categories.length;i++)Padding(padding:const EdgeInsets.symmetric(vertical:7),child:Row(children:[
           Container(width:12,height:12,decoration:BoxDecoration(color:colors[i%colors.length],borderRadius:BorderRadius.circular(4))),
-          const SizedBox(width:9),Expanded(child:Text('${categories[i]['name']}',maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:Nexa.muted,fontSize:11))),
-          Text('${(100*numVal(categories[i]['amount'])/sum).toStringAsFixed(0)}%',style:const TextStyle(color:Nexa.white,fontWeight:FontWeight.w700,fontSize:11)),
+          const SizedBox(width:9),Expanded(child:Text('${categories[i]['name']}',maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:Nexa.muted,fontSize:12))),
+          Text('${(100*numVal(categories[i]['amount'])/sum).toStringAsFixed(0)}%',style:const TextStyle(color:Nexa.white,fontWeight:FontWeight.w700,fontSize:12)),
         ])),
       ]);
       return horizontal?Row(children:[Expanded(flex:5,child:Center(child:chart)),const SizedBox(width:16),Expanded(flex:4,child:legend)]):Column(children:[Expanded(child:FittedBox(child:chart)),const SizedBox(height:8),SizedBox(height:80,child:SingleChildScrollView(child:legend))]);
@@ -130,7 +138,7 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
       ])),
     ]);
   }
-  Widget _cell(String text,int flex,Color c)=>Expanded(flex:flex,child:Text(text,maxLines:1,overflow:TextOverflow.ellipsis,style:TextStyle(color:c,fontSize:11,fontWeight:FontWeight.w600)));
+  Widget _cell(String text,int flex,Color c)=>Expanded(flex:flex,child:Text(text,maxLines:1,overflow:TextOverflow.ellipsis,style:TextStyle(color:c,fontSize:12,fontWeight:FontWeight.w600)));
 
   Widget topTable(List<Map<String,Object?>> rows){
     if(rows.isEmpty)return const Padding(padding:EdgeInsets.all(20),child:Text('No sales in selected period',style:TextStyle(color:Nexa.muted)));
@@ -138,7 +146,7 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
       const _TableHeader(['#','Product','Units sold','Revenue'],[1,5,2,3]),
       for(var i=0;i<rows.length;i++)Container(decoration:const BoxDecoration(border:Border(bottom:BorderSide(color:Nexa.outline,width:.6))),padding:const EdgeInsets.symmetric(vertical:12,horizontal:10),child:Row(children:[
         _cell('${i+1}',1,Nexa.muted),
-        Expanded(flex:5,child:Row(children:[Container(width:26,height:26,decoration:BoxDecoration(color:Nexa.outline,borderRadius:BorderRadius.circular(6)),child:const Icon(Icons.inventory_2_outlined,color:Nexa.muted,size:15)),const SizedBox(width:8),Expanded(child:Text('${rows[i]['name']}',maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:Nexa.white,fontSize:11)))])),
+        Expanded(flex:5,child:Row(children:[Container(width:26,height:26,decoration:BoxDecoration(color:Nexa.outline,borderRadius:BorderRadius.circular(6)),child:const Icon(Icons.inventory_2_outlined,color:Nexa.muted,size:15)),const SizedBox(width:8),Expanded(child:Text('${rows[i]['name']}',maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:Nexa.white,fontSize:12)))])),
         _cell(number(rows[i]['qty']),2,Nexa.muted),_cell(money(rows[i]['revenue']),3,Nexa.white),
       ])),
     ]);
@@ -152,9 +160,17 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
       double metric(int index)=>numVal(data[index].first['n']);
       final sales={for(final r in data[7].where((x)=>x['kind']=='sale')) '${r['date']}':numVal(r['total'])/100};
       final purchases={for(final r in data[7].where((x)=>x['kind']=='purchase')) '${r['date']}':numVal(r['total'])/100};
-      final labels=List.generate(rangeDays,(i)=>DateFormat('yyyy-MM-dd').format(DateTime.now().subtract(Duration(days:rangeDays-1-i))));
-      final salePoints=labels.map((d)=>sales[d]??0.0).toList();
-      final purchasePoints=labels.map((d)=>purchases[d]??0.0).toList();
+      final firstDay=DateTime(effectiveStart.year,effectiveStart.month,effectiveStart.day);
+      final lastDay=DateTime(effectiveEnd.year,effectiveEnd.month,effectiveEnd.day);
+      final chartDays=lastDay.difference(firstDay).inDays+1;
+      final stride=math.max(1,(chartDays/120).ceil());
+            double windowSum(Map<String,double> values,int first){
+        var total=0.0;
+        for(var j=first;j<math.min(first+stride,chartDays);j++){total+=values[DateFormat('yyyy-MM-dd').format(firstDay.add(Duration(days:j)))]??0.0;}
+        return total;
+      }
+      final salePoints=[for(var i=0;i<chartDays;i+=stride)windowSum(sales,i)];
+      final purchasePoints=[for(var i=0;i<chartDays;i+=stride)windowSum(purchases,i)];
       return LayoutBuilder(builder:(context,layout){
         final usable=math.max(330.0,layout.maxWidth-44);
         final count=usable>=1060?4:usable>=600?2:1;
@@ -167,7 +183,11 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
             const Text('Dashboard',style:TextStyle(color:Nexa.white,fontSize:29,fontWeight:FontWeight.w800)),
             const SizedBox(height:4),const Text('Your shop performance, updated from live SQLite data.',style:TextStyle(color:Nexa.muted,fontSize:13)),
           ])),
-            Container(padding:const EdgeInsets.symmetric(horizontal:10),decoration:BoxDecoration(color:Nexa.panel,border:Border.all(color:Nexa.outline),borderRadius:BorderRadius.circular(9)),child:DropdownButtonHideUnderline(child:DropdownButton<int>(value:rangeDays,dropdownColor:Nexa.panel,iconEnabledColor:Nexa.muted,style:const TextStyle(color:Nexa.white,fontSize:12),items:const [DropdownMenuItem(value:7,child:Text('Last 7 Days')),DropdownMenuItem(value:14,child:Text('Last 14 Days')),DropdownMenuItem(value:30,child:Text('Last 30 Days'))],onChanged:(v){if(v!=null)setState((){rangeDays=v;results=load();});}))),
+            Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,children:[
+              OutlinedButton.icon(onPressed:chooseDates,icon:const Icon(Icons.date_range_rounded,size:18),label:Text(selectedRange==null?'Select Dates':'${DateFormat('dd MMM yy').format(selectedRange!.start)} – ${DateFormat('dd MMM yy').format(selectedRange!.end)}')),
+              if(selectedRange!=null)TextButton.icon(onPressed:()=>setState((){selectedRange=null;results=load();}),icon:const Icon(Icons.filter_alt_off,size:17),label:const Text('Clear Filter')),
+              if(selectedRange==null)const Text('LIVE • rolling 30 days',style:TextStyle(color:Nexa.brightBlue,fontWeight:FontWeight.w800,fontSize:12)),
+            ]),
           ]),
           const SizedBox(height:18),
           Wrap(spacing:12,runSpacing:12,children:[
@@ -203,7 +223,7 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
             ]),description:'Live stock and ledger balances')),
           ]),
           const SizedBox(height:15),
-          const Text('Live business figures refresh every 5 seconds. License countdown refreshes every second. Profit is not shown until COGS is verified.',style:TextStyle(color:Nexa.secondary,fontSize:10)),
+          const Text('Figures update every 5 seconds. Clear Date Filter to return to rolling live data. License countdown refreshes every second. Profit is not shown until COGS is verified.',style:TextStyle(color:Nexa.secondary,fontSize:12)),
         ]));
       });
     },
@@ -213,17 +233,17 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
 class _Legend extends StatelessWidget {
   final String name;final Color color;
   const _Legend(this.name,this.color);
-  @override Widget build(BuildContext context)=>Row(mainAxisSize:MainAxisSize.min,children:[CircleAvatar(radius:4,backgroundColor:color),const SizedBox(width:6),Text(name,style:const TextStyle(color:Nexa.muted,fontSize:11))]);
+  @override Widget build(BuildContext context)=>Row(mainAxisSize:MainAxisSize.min,children:[CircleAvatar(radius:4,backgroundColor:color),const SizedBox(width:6),Text(name,style:const TextStyle(color:Nexa.muted,fontSize:12))]);
 }
 class _InfoRow extends StatelessWidget {
   final String name,value;final Color color;
   const _InfoRow(this.name,this.value,this.color);
-  @override Widget build(BuildContext context)=>Padding(padding:const EdgeInsets.symmetric(vertical:10),child:Row(children:[CircleAvatar(radius:5,backgroundColor:color),const SizedBox(width:9),Expanded(child:Text(name,style:const TextStyle(color:Nexa.muted,fontSize:11))),Text(value,style:const TextStyle(color:Nexa.white,fontSize:12,fontWeight:FontWeight.w700))]));
+  @override Widget build(BuildContext context)=>Padding(padding:const EdgeInsets.symmetric(vertical:10),child:Row(children:[CircleAvatar(radius:5,backgroundColor:color),const SizedBox(width:9),Expanded(child:Text(name,style:const TextStyle(color:Nexa.muted,fontSize:12))),Text(value,style:const TextStyle(color:Nexa.white,fontSize:12,fontWeight:FontWeight.w700))]));
 }
 class _TableHeader extends StatelessWidget {
   final List<String> columns;final List<int> flexes;
   const _TableHeader(this.columns,this.flexes);
-  @override Widget build(BuildContext context)=>Container(padding:const EdgeInsets.symmetric(vertical:12,horizontal:10),decoration:BoxDecoration(color:Nexa.panelTop,borderRadius:BorderRadius.circular(8)),child:Row(children:[for(var i=0;i<columns.length;i++)Expanded(flex:flexes[i],child:Text(columns[i],style:const TextStyle(color:Nexa.muted,fontSize:10)))]));
+  @override Widget build(BuildContext context)=>Container(padding:const EdgeInsets.symmetric(vertical:12,horizontal:10),decoration:BoxDecoration(color:Nexa.panelTop,borderRadius:BorderRadius.circular(8)),child:Row(children:[for(var i=0;i<columns.length;i++)Expanded(flex:flexes[i],child:Text(columns[i],style:const TextStyle(color:Nexa.muted,fontSize:12)))]));
 }
 
 class _DonutPainter extends CustomPainter {

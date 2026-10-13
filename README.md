@@ -1,3 +1,17 @@
+# ShopDesk Pro v0.8.0 — White/Light-Blue UI + Invoice Workflows
+
+**Latest changes:** See `docs/UPGRADE_V0_8_CHECKLIST.md`. All updates are in ONE Flutter source project. It contains the source and GitHub Actions Windows release workflow, **not a precompiled EXE**.
+
+- White/light blue color scheme and more readable typography across screens.
+- Dashboard date-range filters / Clear Filter and live polling.
+- POS moved immediately below Dashboard, dedicated invoice listings and two returns pages.
+- Search invoice number or party name and filter paid / unpaid / partial.
+- Activation dialog by clicking trial countdown.
+- In-place invoice revisions (ID and invoice # preserved) with reversal postings and revision snapshots.
+- Configurable sale/purchase serial numbers in Settings.
+
+**Safety:** Back up your SQLite database and keep the working EXE. Test in a new GitHub branch against a COPY of shop data. The Flutter analyzer, full regression suite and Windows compiler were not available in the packaging environment. GitHub Actions must pass before deploying.
+
 **v0.7.0 Hotfix:** Import the existing `ShopDeskExtendedOperations.verifyDatabase` extension in Settings Hub; prevent the license activation handler from overriding Flutter `State.activate`; remove three unused imports. No schema/data migration introduced. Run GitHub Actions to verify compilation; local Flutter SDK not available.
 
 # ShopDesk Pro v0.7.0 — Integrated Flutter Windows Source

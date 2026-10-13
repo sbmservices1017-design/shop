@@ -1,4 +1,4 @@
-name: Build ShopDesk Windows EXE (v0.7.0)
+name: Build ShopDesk Windows EXE (v0.8.0)
 
 on:
   workflow_dispatch:
@@ -31,26 +31,22 @@ jobs:
           if (-not $source.Contains('SHOPDESK_SOURCE_0_4_2_ANALYZER_FIX')) {
             throw 'OLD SOURCE detected: replace lib/store.dart with v0.4.2. Remove older duplicate files.'
           }
-          if (-not $source.Contains("final money=pennies(paid);")) { throw 'Invoice totals fix missing.' }
-          # Match Dart tokens with a regex, not exact line endings. Windows
-          # checkout can convert LF to CRLF, breaking String.Contains with `n.
-          if ($source -notmatch 'return\s+updated;\s*\}\);\s*Future<void>\s+recordPayment\s*\(') {
-            throw 'reviseDocument closing fix missing in lib/store.dart.'
-          }
+          if (-not $source.Contains('existingId:oldId,existingInvoice:')) { throw 'Same-ID invoice correction not uploaded.' }
+          if (-not $source.Contains('_reserveInvoiceNumber')) { throw 'Invoice serial engine not uploaded.' }
           $ui = Get-Content 'lib/main.dart' -Raw
           if ($ui.Contains("r.kind='expense'") -and $ui.Contains("future:s.read('SELECT e.*")) { throw 'Expense SQL quote fix is missing in lib/main.dart' }
           if (-not (Test-Path 'lib/commercial_core.dart')) { throw 'Commercial upgrade source missing' }
           if (-not (Test-Path 'lib/license_public.dart')) { throw 'License public key missing' }
           if (Test-Path 'shopdesk_license_private.pem') { throw 'PRIVATE SIGNING KEY MUST NEVER BE COMMITTED TO GITHUB' }
-          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.7.0'))) { throw 'ShopDesk v0.7.0 source version missing' }
+          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.8.0'))) { throw 'ShopDesk v0.8.0 source version missing' }
           if (-not (Test-Path 'lib/boot_setup.dart')) { throw 'First-launch setup module missing' }
           if (-not (Test-Path 'lib/settings_hub.dart')) { throw 'Settings hub module missing' }
           $settings = Get-Content 'lib/settings_hub.dart' -Raw
           if (-not $settings.Contains("import 'extensions.dart';")) { throw 'SettingsHub is missing extensions.dart import required by verifyDatabase().' }
           if (-not (Test-Path 'lib/license_widgets.dart')) { throw 'Live license status component missing' }
           if (-not (Test-Path 'lib/nexa_theme.dart')) { throw 'NexaDash shared theme missing' }
-          if (-not ((Get-Content 'lib/advanced_dashboard.dart' -Raw).Contains('NexaPanel'))) { throw 'NexaDash dashboard missing' }
-          Write-Host 'ShopDesk v0.7.0 source layout confirmed'  
+          if (-not ((Get-Content 'lib/advanced_dashboard.dart' -Raw).Contains('chooseDates'))) { throw 'Date range dashboard filter missing' }
+          Write-Host 'ShopDesk v0.8.0 source layout confirmed'  
 
       - name: Generate native Windows files
         run: flutter create --platforms=windows --project-name shopdesk_flutter --no-pub .
@@ -73,7 +69,7 @@ jobs:
         # Warnings and deprecations are listed but do not block the release.
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: ShopDesk database and commercial regression tests
+      - name: ShopDesk database and UI regression tests
         run: flutter test test/store_test.dart test/commercial_test.dart test/boot_setup_test.dart test/nexa_ui_test.dart
 
       - name: Build Windows release

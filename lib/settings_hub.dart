@@ -21,6 +21,7 @@ class _SettingsHubState extends State<SettingsHub> {
     (title:'Users & Permissions',icon:Icons.admin_panel_settings_outlined),
     (title:'Backup & Restore',icon:Icons.settings_backup_restore_rounded),
     (title:'License Activation',icon:Icons.key_outlined),
+    (title:'Invoice Serial Numbers',icon:Icons.numbers_outlined),
     (title:'System Information',icon:Icons.info_outline),
   ];
   @override Widget build(BuildContext context){
@@ -30,11 +31,12 @@ class _SettingsHubState extends State<SettingsHub> {
       1=>const UserManagementScreen(),
       2=>const BackupSettings(),
       3=>const LicenseSettings(),
+      4=>const InvoiceSerialSettings(),
       _=>const SystemInfo(),
     };
     return Theme(data:Theme.of(context).copyWith(
-      brightness:Brightness.dark,
-      colorScheme:ColorScheme.fromSeed(seedColor:Nexa.brightBlue,brightness:Brightness.dark,surface:Nexa.panel),
+      brightness:Brightness.light,
+      colorScheme:ColorScheme.fromSeed(seedColor:Nexa.brightBlue,brightness:Brightness.light,surface:Nexa.panel),
       cardTheme:CardThemeData(color:Nexa.panel,elevation:0,shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(12))),
     ),child:ColoredBox(color:Nexa.background,child:LayoutBuilder(builder:(context,constraints){
       final wide=constraints.maxWidth>=780;
@@ -126,9 +128,64 @@ class _LicenseSettingsState extends State<LicenseSettings>{
 }
 class SystemInfo extends StatelessWidget{const SystemInfo({super.key});
   @override Widget build(BuildContext context)=>ListView(padding:const EdgeInsets.all(22),children:[Card(child:Padding(padding:const EdgeInsets.all(24),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-    const Text('ShopDesk Pro v0.6.1',style:TextStyle(fontSize:19,fontWeight:FontWeight.w800)),const SizedBox(height:14),const Text('Flutter · Windows desktop · offline SQLite'),const SizedBox(height:10),
-    const Text('Shop profile → Users & Permissions → Backup & Restore → License Activation → System Information',style:TextStyle(color:Colors.blueGrey)),
+    const Text('ShopDesk Pro v0.8.0',style:TextStyle(fontSize:19,fontWeight:FontWeight.w800)),const SizedBox(height:14),const Text('Flutter · Windows desktop · offline SQLite'),const SizedBox(height:10),
+    const Text('Shop Profile → Users & Permissions → Backup & Restore → License Activation → Invoice Serial Numbers → System Information',style:TextStyle(color:Colors.blueGrey)),
     const SizedBox(height:16),SelectableText(Store.instance.dbPath),
     const SizedBox(height:16),const Text('This software should be run through the GitHub Windows build and tested with copied customer data before deploying to a live shop.',style:TextStyle(color:Colors.blueGrey,fontSize:12)),
+  ])))]);
+}
+
+
+/// Administrator-adjustable invoice numbering. Stored in the same SQLite
+/// database so backup/restore includes the counters and prefixes.
+class InvoiceSerialSettings extends StatefulWidget {
+  const InvoiceSerialSettings({super.key});
+  @override State<InvoiceSerialSettings> createState()=>_InvoiceSerialSettingsState();
+}
+class _InvoiceSerialSettingsState extends State<InvoiceSerialSettings> {
+  final salePrefix=TextEditingController(),purchasePrefix=TextEditingController(),
+      saleNext=TextEditingController(),purchaseNext=TextEditingController();
+  String message='';bool saving=false;
+  @override void initState(){super.initState();load();}
+  Future<void> load() async {
+    final core=CommercialCore.instance;
+    final values=await Future.wait([
+      core.readSetting('invoice_prefix_sale'),core.readSetting('invoice_next_sale'),
+      core.readSetting('invoice_prefix_purchase'),core.readSetting('invoice_next_purchase')]);
+    if(!mounted)return;
+    setState((){
+      salePrefix.text=values[0]??'SAL';saleNext.text=values[1]??'1';
+      purchasePrefix.text=values[2]??'PUR';purchaseNext.text=values[3]??'1';
+    });
+  }
+  Future<void> save() async {
+    if(saving)return;
+    final a=salePrefix.text.trim().toUpperCase(),b=purchasePrefix.text.trim().toUpperCase();
+    final na=int.tryParse(saleNext.text.trim()),nb=int.tryParse(purchaseNext.text.trim());
+    if(!RegExp(r'^[A-Z0-9_-]{2,12}$').hasMatch(a)||!RegExp(r'^[A-Z0-9_-]{2,12}$').hasMatch(b)||
+        na==null||nb==null||na<1||nb<1){setState(()=>message='Use prefixes 2–12 letters/digits and positive serial numbers.');return;}
+    setState(()=>saving=true);
+    try {
+      await Store.instance.db.transaction((t)async{
+        for(final pair in [
+          ['invoice_prefix_sale',a],['invoice_next_sale','$na'],
+          ['invoice_prefix_purchase',b],['invoice_next_purchase','$nb']]){
+          await t.rawInsert('INSERT OR REPLACE INTO app_settings(key,value) VALUES(?,?)',pair);
+        }
+      });
+      if(mounted)setState(()=>message='Saved. Next invoices will use configured series. Existing invoice numbers will remain unchanged.');
+    } catch(e){if(mounted)setState(()=>message='$e');}
+    finally{if(mounted)setState(()=>saving=false);}
+  }
+  @override void dispose(){salePrefix.dispose();purchasePrefix.dispose();saleNext.dispose();purchaseNext.dispose();super.dispose();}
+  @override Widget build(BuildContext context)=>ListView(padding:const EdgeInsets.all(22),children:[Card(child:Padding(padding:const EdgeInsets.all(24),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+    const Text('Invoice Serial Number Settings',style:TextStyle(fontSize:20,fontWeight:FontWeight.w800)),
+    const SizedBox(height:8),const Text('Set sale and purchase prefixes and their next serial numbers. Duplicates are skipped automatically. Previously issued invoices keep their numbers.'),
+    const SizedBox(height:20),const Text('SALE INVOICES',style:TextStyle(fontWeight:FontWeight.bold)),
+    const SizedBox(height:8),Row(children:[Expanded(child:TextField(controller:salePrefix,decoration:const InputDecoration(labelText:'Sale prefix (e.g. SAL)'))),const SizedBox(width:14),Expanded(child:TextField(controller:saleNext,keyboardType:TextInputType.number,decoration:const InputDecoration(labelText:'Next sale serial')))]),
+    const SizedBox(height:22),const Text('PURCHASE INVOICES',style:TextStyle(fontWeight:FontWeight.bold)),
+    const SizedBox(height:8),Row(children:[Expanded(child:TextField(controller:purchasePrefix,decoration:const InputDecoration(labelText:'Purchase prefix (e.g. PUR)'))),const SizedBox(width:14),Expanded(child:TextField(controller:purchaseNext,keyboardType:TextInputType.number,decoration:const InputDecoration(labelText:'Next purchase serial')))]),
+    const SizedBox(height:20),Align(alignment:Alignment.centerLeft,child:FilledButton.icon(onPressed:saving?null:save,icon:const Icon(Icons.save),label:const Text('Save Invoice Number Settings'))),
+    if(message.isNotEmpty)Padding(padding:const EdgeInsets.only(top:16),child:SelectableText(message)),
   ])))]);
 }

@@ -2,27 +2,27 @@ import 'package:flutter/material.dart';
 
 /// Reusable NexaDash-inspired visual tokens. No business logic lives here.
 abstract final class Nexa {
-  static const background = Color(0xFF0A1523);
-  static const sidebar = Color(0xFF0C1829);
-  static const panel = Color(0xFF111F30);
-  static const panelTop = Color(0xFF15263B);
-  static const header = Color(0xFF0C1726);
-  static const outline = Color(0xFF22354A);
-  static const muted = Color(0xFFA4B7D2);
-  static const secondary = Color(0xFF7F96B7);
-  static const brightBlue = Color(0xFF247BFF);
-  static const green = Color(0xFF26CD94);
+  static const background = Color(0xFFF5F9FF);
+  static const sidebar = Color(0xFFFFFFFF);
+  static const panel = Color(0xFFFFFFFF);
+  static const panelTop = Color(0xFFEDF5FF);
+  static const header = Color(0xFFFFFFFF);
+  static const outline = Color(0xFFD8E6F7);
+  static const muted = Color(0xFF263D59);
+  static const secondary = Color(0xFF516C88);
+  static const brightBlue = Color(0xFF1769D2);
+  static const green = Color(0xFF138B65);
   static const purple = Color(0xFFA34CF6);
-  static const orange = Color(0xFFFF914D);
+  static const orange = Color(0xFFD06A27);
   static const pink = Color(0xFFE74E9B);
-  static const white = Color(0xFFF8FAFF);
+  static const white = Color(0xFF142B46);
 
   static const cardGradient = LinearGradient(
-    colors: [Color(0xFF152336), Color(0xFF101C2B)],
+    colors: [Color(0xFFFFFFFF), Color(0xFFF8FBFF)],
     begin: Alignment.topLeft, end: Alignment.bottomRight,
   );
   static const pageGradient = LinearGradient(
-    colors: [Color(0xFF0D1929), Color(0xFF09121E)],
+    colors: [Color(0xFFF7FAFF), Color(0xFFEEF6FF)],
     begin: Alignment.topLeft, end: Alignment.bottomRight,
   );
   static const blueGradient = LinearGradient(
@@ -65,16 +65,16 @@ class NexaAuthLayout extends StatelessWidget {
   @override Widget build(BuildContext context) {
     final old = Theme.of(context);
     final authTheme = old.copyWith(
-      brightness: Brightness.dark,
+      brightness: Brightness.light,
       colorScheme: ColorScheme.fromSeed(
         seedColor: Nexa.brightBlue,
-        brightness: Brightness.dark,
+        brightness: Brightness.light,
         surface: Nexa.panel,
       ),
       textTheme: old.textTheme.apply(bodyColor: Nexa.white, displayColor: Nexa.white),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: const Color(0xFF0D1B2D),
+        fillColor: const Color(0xFFF3F8FF),
         contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 17),
         labelStyle: const TextStyle(color: Nexa.muted),
         hintStyle: const TextStyle(color: Nexa.secondary),
@@ -94,7 +94,7 @@ class NexaAuthLayout extends StatelessWidget {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: Nexa.white,
+          foregroundColor: Nexa.brightBlue,
           minimumSize: const Size(100, 51),
           side: const BorderSide(color: Nexa.outline),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),

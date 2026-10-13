@@ -21,7 +21,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
   final search=TextEditingController(),paid=TextEditingController(text:'0'),notes=TextEditingController();
   List<Map<String,Object?>> catalog=[];Map<int,String> parties={};Map<int,String> accounts={};
   final cart=<_CartRow>[];
-  String category='All',date=nowDate();int? partyId,accountId;bool busy=false,history=false;String? error;
+  String category='All',date=nowDate();int? partyId,accountId;bool busy=false;String? error;
   bool get sale=>widget.kind=='sale';
   @override void initState(){super.initState();load();}
   @override void dispose(){search.dispose();paid.dispose();notes.dispose();for(final row in cart)row.dispose();super.dispose();}
@@ -82,9 +82,8 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
     final filtered=catalog.where((p)=>(category=='All'||p['category']==category)&&('${p['product']} ${p['sku']} ${p['attrs']}').toLowerCase().contains(query)).toList();
     final cats=['All',...{for(final p in catalog)'${p['category']}'}];
     return LayoutBuilder(builder:(ctx,layout)=>Padding(padding:const EdgeInsets.all(20),child:Column(children:[
-      Row(children:[Icon(sale?Icons.point_of_sale:Icons.local_shipping_outlined,color:const Color(0xFF4B63D9),size:26),const SizedBox(width:10),Expanded(child:Text(sale?'Sales POS · Manual Billing':'Purchase POS · Stock In',style:const TextStyle(fontSize:20,fontWeight:FontWeight.w800))),TextButton.icon(onPressed:()=>setState(()=>history=!history),icon:Icon(history?Icons.shopping_cart:Icons.history),label:Text(history?'Back to POS':'Invoice History'))]),const SizedBox(height:12),
-      if(history)Expanded(child:_HistoryPane(kind:widget.kind,onBack:()=>setState(()=>history=false),onChange:widget.onChange,onCorrectInvoice:widget.onCorrectInvoice))
-      else Expanded(child:layout.maxWidth>1000?Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(flex:6,child:catalogPane(filtered,cats)),const SizedBox(width:14),Expanded(flex:5,child:cartPane())]):ListView(children:[SizedBox(height:400,child:catalogPane(filtered,cats)),const SizedBox(height:12),SizedBox(height:650,child:cartPane())]))
+      Row(children:[Icon(sale?Icons.point_of_sale:Icons.local_shipping_outlined,color:const Color(0xFF4B63D9),size:26),const SizedBox(width:10),Expanded(child:Text(sale?'Sales POS · Manual Billing':'Purchase POS · Stock In',style:const TextStyle(fontSize:20,fontWeight:FontWeight.w800))),const SizedBox.shrink()]),const SizedBox(height:12),
+      Expanded(child:layout.maxWidth>1000?Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(flex:6,child:catalogPane(filtered,cats)),const SizedBox(width:14),Expanded(flex:5,child:cartPane())]):ListView(children:[SizedBox(height:400,child:catalogPane(filtered,cats)),const SizedBox(height:12),SizedBox(height:650,child:cartPane())]))
     ])));
   }
   Widget catalogPane(List<Map<String,Object?>> filtered,List<String> categories)=>Card(child:Padding(padding:const EdgeInsets.all(15),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[

@@ -110,8 +110,12 @@ void main(){
     await expectLater(s.reviseDocument(original,'sale',client,nowDate(),[ItemLine(vid,0,1000)],0,cash),throwsFormatException);
     expect((await s.read('SELECT status FROM documents WHERE id=?',[original])).first['status'],'POSTED');
     expect(numVal((await s.stock()).firstWhere((x)=>x['id']==vid)['qty']),-2);
+    final originalNumber=(await s.read('SELECT invoice FROM documents WHERE id=?',[original])).first['invoice'];
     final revised=await s.reviseDocument(original,'sale',client,nowDate(),[ItemLine(vid,3,1000)],500,cash);
-    expect((await s.read('SELECT status FROM documents WHERE id=?',[original])).first['status'],'VOID');
+    expect((await s.read('SELECT invoice FROM documents WHERE id=?',[original])).first['invoice'],originalNumber);
+    expect(revised,original);
+    expect((await s.read('SELECT status FROM documents WHERE id=?',[original])).first['status'],'POSTED');
+    expect((await s.read('SELECT count(*) n FROM documents WHERE id=?',[original])).first['n'],1);
     expect((await s.read('SELECT status FROM documents WHERE id=?',[revised])).first['status'],'POSTED');
     expect(numVal((await s.stock()).firstWhere((x)=>x['id']==vid)['qty']),-3);
     final balance=(await s.read('SELECT sum(debit-credit) AS bal FROM party_ledger WHERE party_id=?',[client])).first['bal'];
@@ -119,6 +123,31 @@ void main(){
     final report=await buildReport(s,ReportFilter(type:'Sales',start:'2020-01-01',end:'2100-01-01',variant:vid,paymentStatus:'partial'));
     expect(report.rows.length,1);
     expect(await s.verifyDatabase(),isEmpty);
+    final correctedAgain=await s.reviseDocument(original,'sale',client,nowDate(),[ItemLine(vid,4,1000)],1000,cash);
+    expect(correctedAgain,original);
+    expect((await s.read('SELECT count(*) AS n FROM document_revisions WHERE document_id=?',[original])).first['n'],2);
+    expect(numVal((await s.stock()).firstWhere((x)=>x['id']==vid)['qty']),-4);
+    await s.voidDocument(original);
+    expect(numVal((await s.stock()).firstWhere((x)=>x['id']==vid)['qty']),0);
+    expect((await s.read('SELECT count(*) AS n FROM documents WHERE id=?',[original])).first['n'],1);
+    expect(await s.verifyDatabase(),isEmpty);
+  });
+
+  test('invoice prefixes and serials persist and advance independently',()async{
+    final customer=await s.addParty('customer','Numbering customer','','');
+    final supplier=await s.addParty('supplier','Numbering supplier','','');
+    final category=await s.addCategory('Numbering category');
+    final product=await s.addProduct(category,'Numbering product');
+    final variant=await s.addVariant(product,'SERIAL-SKU','pcs',{},0);
+    final cash=(await s.read("SELECT id FROM accounts WHERE code='1000'")).first['id'] as int;
+    await s.db.rawInsert("INSERT OR REPLACE INTO app_settings(key,value) VALUES('invoice_prefix_sale','BILL')");
+    await s.db.rawInsert("INSERT OR REPLACE INTO app_settings(key,value) VALUES('invoice_next_sale','18')");
+    final a=await s.postDocument('sale',customer,nowDate(),[ItemLine(variant,1,100)],100,cash);
+    final b=await s.postDocument('sale',customer,nowDate(),[ItemLine(variant,1,100)],100,cash);
+    final c=await s.postDocument('purchase',supplier,nowDate(),[ItemLine(variant,1,50)],0,cash);
+    expect((await s.read('SELECT invoice FROM documents WHERE id=?',[a])).first['invoice'],'BILL-000018');
+    expect((await s.read('SELECT invoice FROM documents WHERE id=?',[b])).first['invoice'],'BILL-000019');
+    expect('${(await s.read('SELECT invoice FROM documents WHERE id=?',[c])).first['invoice']}'.startsWith('PUR-'),true);
   });
 
   test('filtered ledgers display an opening-adjusted running balance',()async{

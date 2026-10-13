@@ -1,1 +1,1 @@
-ShopDesk Pro v0.7.0 - NexaDash-inspired cohesive UI
+ShopDesk Pro v0.8.0 · LIGHT BLUE UI + DATE FILTER + INVOICE LISTING + SAME-ID CORRECTION
