@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'commercial_core.dart';
+import 'store.dart';
 
 class CommercialGate extends StatefulWidget {
   final Widget child;

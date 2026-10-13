@@ -1,4 +1,3 @@
-SHOPDESK FLUTTER DEVELOPMENT SOURCE v0.5.0
-Base: previous chat's v0.4.3 package / public GitHub source layout.
-Commercial addition: registration/login, signed offline trial/licensing, separate owner key generator, users/permissions UI, shop branding, POS, dashboard and payment status allocation.
-Build status: NOT compiled or validated on Windows in this environment; run GitHub Actions and tests.
+SHOPDESK FLUTTER DEVELOPMENT SOURCE v0.5.1
+Changes from v0.5.0: advanced_dashboard.dart widget syntax rewritten; missing store.dart import added in commercial_ui.dart.
+GitHub Windows build, Flutter analyzer, and Flutter tests must still run; no compiled EXE is included.

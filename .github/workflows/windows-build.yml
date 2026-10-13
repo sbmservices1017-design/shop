@@ -1,4 +1,4 @@
-name: Build ShopDesk Windows EXE (v0.5.0)
+name: Build ShopDesk Windows EXE (v0.5.1)
 
 on:
   workflow_dispatch:
@@ -42,7 +42,8 @@ jobs:
           if (-not (Test-Path 'lib/commercial_core.dart')) { throw 'Commercial upgrade source missing' }
           if (-not (Test-Path 'lib/license_public.dart')) { throw 'License public key missing' }
           if (Test-Path 'shopdesk_license_private.pem') { throw 'PRIVATE SIGNING KEY MUST NEVER BE COMMITTED TO GITHUB' }
-          Write-Host 'ShopDesk v0.5 commercial source layout confirmed'  
+          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.5.1'))) { throw 'ShopDesk v0.5.1 source version missing' }
+          Write-Host 'ShopDesk v0.5.1 source layout confirmed'  
 
       - name: Generate native Windows files
         run: flutter create --platforms=windows --project-name shopdesk_flutter --no-pub .
