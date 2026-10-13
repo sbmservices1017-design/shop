@@ -25,6 +25,7 @@ const schema = <String>[
 '''CREATE TABLE IF NOT EXISTS journal(id INTEGER PRIMARY KEY,date TEXT NOT NULL,source_type TEXT NOT NULL,source_id INTEGER NOT NULL,note TEXT NOT NULL DEFAULT '')''',
 '''CREATE TABLE IF NOT EXISTS journal_lines(id INTEGER PRIMARY KEY,journal_id INTEGER NOT NULL REFERENCES journal(id),account_id INTEGER NOT NULL REFERENCES accounts(id),debit INTEGER NOT NULL DEFAULT 0,credit INTEGER NOT NULL DEFAULT 0)''',
 '''CREATE TABLE IF NOT EXISTS receipts(id INTEGER PRIMARY KEY,party_id INTEGER NOT NULL REFERENCES parties(id),date TEXT NOT NULL,amount INTEGER NOT NULL CHECK(amount>0),account_id INTEGER NOT NULL REFERENCES accounts(id),note TEXT NOT NULL DEFAULT '')''',
+'''CREATE TABLE IF NOT EXISTS receipt_allocations(receipt_id INTEGER NOT NULL REFERENCES receipts(id), document_id INTEGER NOT NULL REFERENCES documents(id), amount INTEGER NOT NULL CHECK(amount>0),PRIMARY KEY(receipt_id,document_id))''',
 '''CREATE TABLE IF NOT EXISTS expense_categories(id INTEGER PRIMARY KEY,name TEXT NOT NULL UNIQUE COLLATE NOCASE)''',
 '''CREATE TABLE IF NOT EXISTS expenses(id INTEGER PRIMARY KEY,category_id INTEGER NOT NULL REFERENCES expense_categories(id),date TEXT NOT NULL,amount INTEGER NOT NULL CHECK(amount>0),account_id INTEGER NOT NULL REFERENCES accounts(id),description TEXT NOT NULL DEFAULT '')''',
 '''CREATE TABLE IF NOT EXISTS employees(id INTEGER PRIMARY KEY,name TEXT NOT NULL,designation TEXT NOT NULL DEFAULT '',salary INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1)''',
@@ -207,6 +208,8 @@ class Store {
   Future<void> _voidDocumentTxn(Transaction t,int id,{String? reversalDate}) async {
     final ds=await t.rawQuery("SELECT * FROM documents WHERE id=? AND status='POSTED'",[id]);
     if(ds.isEmpty)throw const FormatException('Active invoice not found');
+    final allocated=await t.rawQuery('SELECT 1 FROM receipt_allocations WHERE document_id=? LIMIT 1',[id]);
+    if(allocated.isNotEmpty)throw const FormatException('Reverse allocated receipts before correcting/voiding this invoice');
     final attached=await t.rawQuery("SELECT id FROM document_returns WHERE document_id=? AND status='POSTED' LIMIT 1",[id]);
     if(attached.isNotEmpty)throw const FormatException('Void or reverse linked returns first');
     final d=ds.first;final kind=d['kind'] as String;final date=reversalDate??nowDate();
@@ -236,6 +239,19 @@ class Store {
     await db.transaction((t)async{
       final parties=await t.rawQuery('SELECT * FROM parties WHERE id=?',[partyId]);if(parties.isEmpty) throw const FormatException('Party not found');
       final kind=parties.first['kind'];final id=await t.rawInsert('INSERT INTO receipts(party_id,date,amount,account_id,note) VALUES(?,?,?,?,?)',[partyId,nowDate(),p,accountId,note]);
+      // Apply receipt to oldest outstanding invoices for this customer/supplier.
+      // Any excess remains an unallocated account credit.
+      var remaining=p;
+      final openInvoices=await t.rawQuery("SELECT id,total,paid FROM documents WHERE party_id=? AND kind=? AND status='POSTED' AND total>paid ORDER BY date,id",[partyId,kind=='customer'?'sale':'purchase']);
+      for(final invoice in openInvoices){
+        if(remaining<=0)break;
+        final due=(invoice['total'] as int)-(invoice['paid'] as int);
+        final portion=due<remaining?due:remaining;
+        if(portion<=0)continue;
+        await t.rawInsert('INSERT INTO receipt_allocations(receipt_id,document_id,amount) VALUES(?,?,?)',[id,invoice['id'],portion]);
+        await t.rawUpdate('UPDATE documents SET paid=paid+? WHERE id=?',[portion,invoice['id']]);
+        remaining-=portion;
+      }
       await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',[partyId,kind=='supplier'?p:0,kind=='customer'?p:0,'receipt',id,nowDate(),note]);
       final offset=await accountCode(t,kind=='customer'?'1100':'2000');
       await addJournal(t,'receipt',id,nowDate(),note,kind=='customer'?[[accountId,p,0],[offset,0,p]]:[[offset,p,0],[accountId,0,p]]);

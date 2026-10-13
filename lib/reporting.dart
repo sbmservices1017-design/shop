@@ -5,6 +5,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'store.dart';
+import 'commercial_core.dart';
 
 const reportTypes=<String>[
   'Sales','Purchases','Products','Stock','Stock Movements','Customers','Suppliers',
@@ -261,12 +262,24 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
 
 class Exports {
   static Future<void> pdf(ReportResult report,{bool print=false}) async {
+    final settings=CommercialCore.instance;
+    final shopName=await settings.readSetting('shop_name')??'ShopDesk';
+    final shopPhone=await settings.readSetting('shop_phone')??'';
+    final shopAddress=await settings.readSetting('shop_address')??'';
+    final logoPath=await settings.readSetting('shop_logo')??'';
+    pw.MemoryImage? logo;
+    if(logoPath.isNotEmpty){
+      final image=File(logoPath);
+      if(await image.exists()){
+        try{logo=pw.MemoryImage(await image.readAsBytes());}catch(_){/* continue without logo */}
+      }
+    }
     final doc=pw.Document();
     final landscape=report.headings.length>6;
     doc.addPage(pw.MultiPage(pageFormat:landscape?PdfPageFormat.a4.landscape:PdfPageFormat.a4,
       margin:const pw.EdgeInsets.all(24),
       header:(context)=>pw.Column(crossAxisAlignment:pw.CrossAxisAlignment.start,children:[
-        pw.Text('SHOPDESK  /  ${report.title.toUpperCase()}',style:pw.TextStyle(fontSize:14,fontWeight:pw.FontWeight.bold)),
+        pw.Row(children:[if(logo!=null)pw.Padding(padding:const pw.EdgeInsets.only(right:10),child:pw.Image(logo,height:34,width:42)),pw.Expanded(child:pw.Column(crossAxisAlignment:pw.CrossAxisAlignment.start,children:[pw.Text(shopName,style:pw.TextStyle(fontSize:14,fontWeight:pw.FontWeight.bold)),if(shopPhone.isNotEmpty||shopAddress.isNotEmpty)pw.Text('$shopPhone  $shopAddress',style:const pw.TextStyle(fontSize:8)),pw.Text(report.title,style:const pw.TextStyle(fontSize:10))]))]),
         pw.Text('Generated ${DateTime.now().toLocal().toString().substring(0,16)}',style:const pw.TextStyle(fontSize:8)),pw.SizedBox(height:10)]),
       footer:(context)=>pw.Align(alignment:pw.Alignment.centerRight,child:pw.Text('Page ${context.pageNumber} of ${context.pagesCount}',style:const pw.TextStyle(fontSize:8))),
       build:(context)=>[pw.TableHelper.fromTextArray(headers:report.headings,

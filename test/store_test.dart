@@ -144,4 +144,23 @@ void main(){
     final rpt=await buildReport(s,ReportFilter(type:'Sales Returns',start:'2020-01-01',end:'2100-01-01'));
     expect(rpt.headings,contains('Cash_Refund'));
   });
+
+  test('receipt allocation automatically updates invoice Paid status and reverses safely',()async{
+    final cat=await s.addCategory('Payment State Test');
+    final product=await s.addProduct(cat,'Payment Test Product');
+    final variant=await s.addVariant(product,'PAY-TEST-001','pcs',{},0);
+    final customer=await s.addParty('customer','Paid Status Customer','','');
+    final cash=(await s.read("SELECT id FROM accounts WHERE code='1000'")).first['id'] as int;
+    final invoice=await s.postDocument('sale',customer,nowDate(),[ItemLine(variant,1,1000)],0,cash);
+    await s.recordPayment(customer,400,cash,'First instalment');
+    var record=(await s.read('SELECT total,paid FROM documents WHERE id=?',[invoice])).first;
+    expect(record['paid'],40000);
+    await s.recordPayment(customer,600,cash,'Final instalment');
+    record=(await s.read('SELECT total,paid FROM documents WHERE id=?',[invoice])).first;
+    expect(record['paid'],record['total']);
+    final latest=(await s.read('SELECT id FROM receipts WHERE party_id=? ORDER BY id DESC LIMIT 1',[customer])).first['id'] as int;
+    await s.voidReceipt(latest);
+    record=(await s.read('SELECT total,paid FROM documents WHERE id=?',[invoice])).first;
+    expect(record['paid'],40000);
+  });
 }

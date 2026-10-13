@@ -1,4 +1,4 @@
-name: Build ShopDesk Windows EXE (v0.4.3)
+name: Build ShopDesk Windows EXE (v0.5.0)
 
 on:
   workflow_dispatch:
@@ -39,7 +39,10 @@ jobs:
           }
           $ui = Get-Content 'lib/main.dart' -Raw
           if ($ui.Contains("r.kind='expense'") -and $ui.Contains("future:s.read('SELECT e.*")) { throw 'Expense SQL quote fix is missing in lib/main.dart' }
-          Write-Host 'Corrected source confirmed: v0.4.3 (line-ending-safe)' 
+          if (-not (Test-Path 'lib/commercial_core.dart')) { throw 'Commercial upgrade source missing' }
+          if (-not (Test-Path 'lib/license_public.dart')) { throw 'License public key missing' }
+          if (Test-Path 'shopdesk_license_private.pem') { throw 'PRIVATE SIGNING KEY MUST NEVER BE COMMITTED TO GITHUB' }
+          Write-Host 'ShopDesk v0.5 commercial source layout confirmed'  
 
       - name: Generate native Windows files
         run: flutter create --platforms=windows --project-name shopdesk_flutter --no-pub .
@@ -62,8 +65,8 @@ jobs:
         # Warnings and deprecations are listed but do not block the release.
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: ShopDesk database regression tests
-        run: flutter test test/store_test.dart
+      - name: ShopDesk database and commercial regression tests
+        run: flutter test test/store_test.dart test/commercial_test.dart
 
       - name: Build Windows release
         run: flutter build windows --release

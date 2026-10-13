@@ -3,15 +3,21 @@ import 'package:intl/intl.dart';
 import 'store.dart';
 import 'extensions.dart';
 import 'reporting.dart';
+import 'commercial_core.dart';
+import 'commercial_ui.dart';
+import 'modern_pos.dart';
+import 'advanced_dashboard.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {await Store.instance.init();await ensureExtendedSchema(Store.instance);runApp(const ShopDesk());}
+  try {await Store.instance.init();await ensureExtendedSchema(Store.instance);await CommercialCore.instance.init();runApp(const ShopDesk());}
   catch(e){runApp(MaterialApp(home:Scaffold(body:Center(child:SelectableText('Could not open ShopDesk database: $e')))));}
 }
 const ink=Color(0xFF19243A);
 const blue=Color(0xFF4B63D9);
 const bg=Color(0xFFF5F7FB);
+String activeShopModule='Dashboard';
+bool canShopAction(String action)=>CommercialCore.instance.current?.allowed(activeShopModule,action)==true;
 String rs(Object? v)=>'Rs. ${NumberFormat('#,##0.00').format(numVal(v))}';
 String funds(Object? paisa)=>rs(rupees(paisa));
 
@@ -24,7 +30,7 @@ class ShopDesk extends StatelessWidget {
       inputDecorationTheme:InputDecorationTheme(filled:true,fillColor:Colors.white,contentPadding:const EdgeInsets.symmetric(horizontal:14,vertical:14),
         border:OutlineInputBorder(borderRadius:BorderRadius.circular(10),borderSide:const BorderSide(color:Color(0xFFE2E7F0))),
         enabledBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(10),borderSide:const BorderSide(color:Color(0xFFE2E7F0))))),
-    home:const Shell());
+    home:const CommercialGate(child:Shell()));
 }
 
 class FieldSpec {
@@ -75,33 +81,46 @@ class _ShellState extends State<Shell> {
     (label:'Customers',icon:Icons.people_outline),(label:'Suppliers',icon:Icons.local_shipping_outlined),
     (label:'Expenses',icon:Icons.payments_outlined),(label:'Employees & Payroll',icon:Icons.badge_outlined),
     (label:'Accounts & Journal',icon:Icons.account_balance_outlined),(label:'Reports / Export',icon:Icons.analytics_outlined),
-    (label:'Settings & Backup',icon:Icons.settings_outlined)];
+    (label:'Settings & Backup',icon:Icons.settings_outlined),
+    (label:'Shop Profile',icon:Icons.store_outlined),(label:'Users & Permissions',icon:Icons.manage_accounts_outlined)];
   void refresh(){if(mounted)setState(()=>revision++);}
-  Widget screen()=>switch(page){
-    0=>Dashboard(revision:revision),1=>ProductsScreen(onChange:refresh),2=>CategoriesScreen(onChange:refresh),
-    3=>StockScreen(onChange:refresh),4=>DocumentScreen(kind:'sale',onChange:refresh),5=>DocumentScreen(kind:'purchase',onChange:refresh),
+  Future<void> correctPostedInvoice(String kind,int id)async{
+    final ok=await showDialog<bool>(context:context,builder:(ctx)=>InvoiceDialog(kind:kind,existingId:id));
+    if(ok==true)refresh();
+  }
+  Widget screen(){activeShopModule=menu[page].label;return switch(page){
+    0=>AdvancedDashboard(revision:revision),1=>ProductsScreen(onChange:refresh),2=>CategoriesScreen(onChange:refresh),
+    3=>StockScreen(onChange:refresh),4=>ModernPosScreen(kind:'sale',onChange:refresh,onCorrectInvoice:(id)=>correctPostedInvoice('sale',id)),5=>ModernPosScreen(kind:'purchase',onChange:refresh,onCorrectInvoice:(id)=>correctPostedInvoice('purchase',id)),
     6=>ReturnScreen(onChange:refresh),7=>PartiesScreen(kind:'customer',onChange:refresh),8=>PartiesScreen(kind:'supplier',onChange:refresh),
     9=>ExpenseScreen(onChange:refresh),10=>EmployeeScreen(onChange:refresh),11=>AccountsScreen(onChange:refresh),
-    12=>ReportsScreen(revision:revision),_=>SettingsScreen(onChange:refresh)};
-  @override Widget build(BuildContext context)=>Scaffold(body:Row(children:[
+    12=>ReportsScreen(revision:revision),13=>SettingsScreen(onChange:refresh),14=>const ShopProfileScreen(),_=>const UserManagementScreen()};}
+  @override Widget build(BuildContext context){
+    final core=CommercialCore.instance;
+    final available=[for(var i=0;i<menu.length;i++)if(core.current?.allowed(menu[i].label,'view')==true||menu[i].label=='Shop Profile'&&core.current?.isAdmin==true)i];
+    if(available.isEmpty)return Scaffold(body:Center(child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[const Text('No modules assigned to this account.'),TextButton(onPressed:core.signOut,child:const Text('Sign out'))])));
+    if(!available.contains(page))page=available.first;
+    return Scaffold(body:Row(children:[
     Container(width:240,color:ink,child:Column(children:[
       Padding(padding:const EdgeInsets.fromLTRB(22,26,14,28),child:Row(children:[
         Container(padding:const EdgeInsets.all(9),decoration:BoxDecoration(color:blue,borderRadius:BorderRadius.circular(12)),child:const Icon(Icons.storefront_rounded,color:Colors.white)),
         const SizedBox(width:12),const Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('ShopDesk',style:TextStyle(color:Colors.white,fontWeight:FontWeight.w800,fontSize:21)),Text('LOCAL BUSINESS SUITE',style:TextStyle(color:Color(0xFF97A5C4),fontSize:9,letterSpacing:1))])])),
-      Expanded(child:ListView(padding:const EdgeInsets.symmetric(horizontal:11),children:[for(var i=0;i<menu.length;i++)Padding(padding:const EdgeInsets.only(bottom:3),child:Material(color:i==page?const Color(0xFF354466):Colors.transparent,borderRadius:BorderRadius.circular(10),child:InkWell(borderRadius:BorderRadius.circular(10),onTap:()=>setState(()=>page=i),child:Padding(padding:const EdgeInsets.symmetric(horizontal:13,vertical:13),child:Row(children:[Icon(menu[i].icon,size:19,color:i==page?Colors.white:const Color(0xFFA3B1CE)),const SizedBox(width:12),Expanded(child:Text(menu[i].label,style:TextStyle(color:i==page?Colors.white:const Color(0xFFCCD5E5),fontSize:12,fontWeight:i==page?FontWeight.w700:FontWeight.w500)))])))))])),
+      Expanded(child:ListView(padding:const EdgeInsets.symmetric(horizontal:11),children:[for(final i in available)Padding(padding:const EdgeInsets.only(bottom:3),child:Material(color:i==page?const Color(0xFF354466):Colors.transparent,borderRadius:BorderRadius.circular(10),child:InkWell(borderRadius:BorderRadius.circular(10),onTap:()=>setState(()=>page=i),child:Padding(padding:const EdgeInsets.symmetric(horizontal:13,vertical:13),child:Row(children:[Icon(menu[i].icon,size:19,color:i==page?Colors.white:const Color(0xFFA3B1CE)),const SizedBox(width:12),Expanded(child:Text(menu[i].label,style:TextStyle(color:i==page?Colors.white:const Color(0xFFCCD5E5),fontSize:12,fontWeight:i==page?FontWeight.w700:FontWeight.w500)))])))))])),
       const Divider(color:Color(0xFF32425F)),const Padding(padding:EdgeInsets.symmetric(vertical:15),child:Row(mainAxisAlignment:MainAxisAlignment.center,children:[Icon(Icons.circle,color:Color(0xFF50D1A2),size:8),SizedBox(width:7),Text('Offline • SQLite • Single PC',style:TextStyle(color:Color(0xFF9EADCA),fontSize:11))]))
     ])),
     Expanded(child:Column(children:[
       Container(height:77,color:Colors.white,padding:const EdgeInsets.symmetric(horizontal:30),child:Row(children:[
         Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisAlignment:MainAxisAlignment.center,children:[Text(menu[page].label,style:const TextStyle(fontSize:22,color:ink,fontWeight:FontWeight.w800)),Text('Manage your shop with confidence',style:TextStyle(fontSize:11,color:Colors.blueGrey.shade400))])),
         OutlinedButton.icon(onPressed:refresh,icon:const Icon(Icons.refresh,size:18),label:const Text('Refresh')),
-        const SizedBox(width:20),CircleAvatar(backgroundColor:const Color(0xFFE9EDF9),child:Icon(Icons.person,color:blue))])),
+        const SizedBox(width:12),Chip(avatar:const Icon(Icons.key,size:15),label:Text(core.license.label,style:const TextStyle(fontSize:11))),
+        const SizedBox(width:12),Text(core.current?.username??'',style:const TextStyle(fontWeight:FontWeight.bold,fontSize:12)),
+        IconButton(tooltip:'Sign out',onPressed:core.signOut,icon:const Icon(Icons.logout))])),
       Expanded(child:KeyedSubtree(key:ValueKey('$page-$revision'),child:screen()))
     ]))]));
+  }
 }
 
 Widget section(String title,{Widget? action})=>Padding(padding:const EdgeInsets.only(bottom:16),child:Row(children:[Expanded(child:Text(title,style:const TextStyle(fontSize:18,fontWeight:FontWeight.w800,color:ink))),if(action!=null)action]));
-Widget addButton(String label,VoidCallback onTap)=>FilledButton.icon(onPressed:onTap,icon:const Icon(Icons.add,size:17),label:Text(label));
+Widget addButton(String label,VoidCallback onTap)=>FilledButton.icon(onPressed:canShopAction('create')?onTap:null,icon:const Icon(Icons.add,size:17),label:Text(label));
 Widget pageWrap(List<Widget> children)=>SingleChildScrollView(padding:const EdgeInsets.all(25),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:children));
 Widget panel(Widget child)=>Card(child:Padding(padding:const EdgeInsets.all(19),child:child));
 Widget listing(List<String> headers,List<List<Widget>> rows){
@@ -112,7 +131,11 @@ Widget listing(List<String> headers,List<List<Widget>> rows){
 }
 Widget txt(Object? s)=>Text('${s??''}',style:const TextStyle(fontSize:12));
 Widget buttons(List<Widget> widgets)=>Wrap(spacing:6,children:widgets);
-Widget small(String s,VoidCallback tap,{IconData icon=Icons.edit_outlined})=>IconButton(tooltip:s,onPressed:tap,icon:Icon(icon,size:18));
+Widget small(String s,VoidCallback tap,{IconData icon=Icons.edit_outlined}){
+  final title=s.toLowerCase();
+  final action=title.contains('view')||title.contains('print')?'view':title.contains('archive')||title.contains('void')||title.contains('disable')?'delete':title.contains('edit')||title.contains('rename')||title.contains('correct')?'edit':'create';
+  return IconButton(tooltip:s,onPressed:canShopAction(action)?tap:null,icon:Icon(icon,size:18));
+}
 Future<Map<int,String>> options(Store s,String query,[List<Object?> args=const []]) async => {for(final x in await s.read(query,args))x['id'] as int:'${x['name']}'};
 Future<Map<int,String>> variants(Store s) async => {for(final x in await s.stock())x['id'] as int:'${x['product']} • ${x['sku']} (${x['unit']})'};
 Future<Map<int,String>> accountChoices(Store s)=>options(s,"SELECT id,name FROM accounts WHERE type='asset' AND code IN ('1000','1010') ORDER BY id");

@@ -138,6 +138,11 @@ extension ShopDeskExtendedOperations on Store {
     final row=await t.rawQuery('SELECT * FROM receipts WHERE id=?',[receiptId]);
     if(row.isEmpty)throw const FormatException('Receipt not found');
     if((await t.rawQuery("SELECT id FROM reversed_transactions WHERE kind='receipt' AND source_id=?",[receiptId])).isNotEmpty)throw const FormatException('Payment already reversed');
+    final allocations=await t.rawQuery('SELECT document_id,amount FROM receipt_allocations WHERE receipt_id=?',[receiptId]);
+    for(final a in allocations){
+      await t.rawUpdate('UPDATE documents SET paid=paid-? WHERE id=?',[a['amount'],a['document_id']]);
+    }
+    await t.rawDelete('DELETE FROM receipt_allocations WHERE receipt_id=?',[receiptId]);
     final original=await t.rawQuery("SELECT * FROM party_ledger WHERE source_type='receipt' AND source_id=?",[receiptId]);
     for(final l in original){
       await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',

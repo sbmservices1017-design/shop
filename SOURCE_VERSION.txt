@@ -1,5 +1,4 @@
-ShopDesk Flutter source: v0.4.3
-Build fix: Windows GitHub Actions guard uses whitespace-independent regex and .gitattributes
-Dart source: same as v0.4.2 (existing corrections preserved)
-Local verification: regex on LF/CRLF, YAML, zip, SQLite schema
-Flutter analyzer/Windows compiler: NOT AVAILABLE here; verify via GitHub Actions
+SHOPDESK FLUTTER DEVELOPMENT SOURCE v0.5.0
+Base: previous chat's v0.4.3 package / public GitHub source layout.
+Commercial addition: registration/login, signed offline trial/licensing, separate owner key generator, users/permissions UI, shop branding, POS, dashboard and payment status allocation.
+Build status: NOT compiled or validated on Windows in this environment; run GitHub Actions and tests.

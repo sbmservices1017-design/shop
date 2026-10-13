@@ -1,3 +1,5 @@
+# v0.5 Commercial Upgrade: read [UPGRADE_V0_5_README.md](UPGRADE_V0_5_README.md) first.
+
 ## v0.4.3 GitHub build guard patch
 
 If the workflow fails at **Verify corrected ShopDesk sources were uploaded** with `reviseDocument closing fix missing`, replace `.github/workflows/windows-build.yml` from this package. That error can result from Windows line-ending conversion, not a missing Dart fix. See `GITHUB_GUARD_FIX.md`. **Flutter compile still needs verification on GitHub.**
