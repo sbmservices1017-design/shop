@@ -10,6 +10,7 @@ import 'advanced_dashboard.dart';
 import 'boot_setup.dart';
 import 'settings_hub.dart';
 import 'license_widgets.dart';
+import 'nexa_theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -95,28 +96,63 @@ class _ShellState extends State<Shell> {
     6=>ReturnScreen(onChange:refresh),7=>PartiesScreen(kind:'customer',onChange:refresh),8=>PartiesScreen(kind:'supplier',onChange:refresh),
     9=>ExpenseScreen(onChange:refresh),10=>EmployeeScreen(onChange:refresh),11=>AccountsScreen(onChange:refresh),
     12=>ReportsScreen(revision:revision),_=>const SettingsHub()};}
+  Future<void> searchModules(List<int> available) async {
+    final chosen=await showSearch<int?>(context:context,delegate:_ModuleSearchDelegate(menu,available));
+    if(chosen!=null && mounted)setState(()=>page=chosen);
+  }
   @override Widget build(BuildContext context){
     final core=CommercialCore.instance;
-    final available=[for(var i=0;i<menu.length;i++)if(core.current?.allowed(menu[i].label,'view')==true||menu[i].label=='Shop Profile'&&core.current?.isAdmin==true)i];
+    final available=[for(var i=0;i<menu.length;i++)if(core.current?.allowed(menu[i].label,'view')==true)i];
     if(available.isEmpty)return Scaffold(body:Center(child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[const Text('No modules assigned to this account.'),TextButton(onPressed:core.signOut,child:const Text('Sign out'))])));
     if(!available.contains(page))page=available.first;
-    return Scaffold(body:Row(children:[
-    Container(width:240,color:ink,child:Column(children:[
-      Padding(padding:const EdgeInsets.fromLTRB(22,26,14,28),child:Row(children:[
-        Container(padding:const EdgeInsets.all(9),decoration:BoxDecoration(color:blue,borderRadius:BorderRadius.circular(12)),child:const Icon(Icons.storefront_rounded,color:Colors.white)),
-        const SizedBox(width:12),const Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('ShopDesk',style:TextStyle(color:Colors.white,fontWeight:FontWeight.w800,fontSize:21)),Text('LOCAL BUSINESS SUITE',style:TextStyle(color:Color(0xFF97A5C4),fontSize:9,letterSpacing:1))])])),
-      Expanded(child:ListView(padding:const EdgeInsets.symmetric(horizontal:11),children:[for(final i in available)Padding(padding:const EdgeInsets.only(bottom:3),child:Material(color:i==page?const Color(0xFF354466):Colors.transparent,borderRadius:BorderRadius.circular(10),child:InkWell(borderRadius:BorderRadius.circular(10),onTap:()=>setState(()=>page=i),child:Padding(padding:const EdgeInsets.symmetric(horizontal:13,vertical:13),child:Row(children:[Icon(menu[i].icon,size:19,color:i==page?Colors.white:const Color(0xFFA3B1CE)),const SizedBox(width:12),Expanded(child:Text(menu[i].label,style:TextStyle(color:i==page?Colors.white:const Color(0xFFCCD5E5),fontSize:12,fontWeight:i==page?FontWeight.w700:FontWeight.w500)))])))))])),
-      const Divider(color:Color(0xFF32425F)),const Padding(padding:EdgeInsets.symmetric(vertical:15),child:Row(mainAxisAlignment:MainAxisAlignment.center,children:[Icon(Icons.circle,color:Color(0xFF50D1A2),size:8),SizedBox(width:7),Text('Offline • SQLite • Single PC',style:TextStyle(color:Color(0xFF9EADCA),fontSize:11))]))
-    ])),
-    Expanded(child:Column(children:[
-      Container(height:77,color:Colors.white,padding:const EdgeInsets.symmetric(horizontal:30),child:Row(children:[
-        Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisAlignment:MainAxisAlignment.center,children:[Text(menu[page].label,style:const TextStyle(fontSize:22,color:ink,fontWeight:FontWeight.w800)),Text('Manage your shop with confidence',style:TextStyle(fontSize:11,color:Colors.blueGrey.shade400))])),
-        OutlinedButton.icon(onPressed:refresh,icon:const Icon(Icons.refresh,size:18),label:const Text('Refresh')),
-        const SizedBox(width:12),const LicenseCountdown(compact:true),
-        const SizedBox(width:12),Text(core.current?.username??'',style:const TextStyle(fontWeight:FontWeight.bold,fontSize:12)),
-        IconButton(tooltip:'Sign out',onPressed:core.signOut,icon:const Icon(Icons.logout))])),
-      Expanded(child:KeyedSubtree(key:ValueKey('$page-$revision'),child:screen()))
-    ]))]));
+    final dark=page==0;
+    return Scaffold(backgroundColor:dark?Nexa.background:bg,body:Row(children:[
+      Container(width:237,decoration:const BoxDecoration(color:Nexa.sidebar,border:Border(right:BorderSide(color:Nexa.outline))),child:Column(children:[
+        Padding(padding:const EdgeInsets.fromLTRB(23,23,12,29),child:Row(children:[
+          Container(padding:const EdgeInsets.all(8),decoration:BoxDecoration(gradient:Nexa.blueGradient,borderRadius:BorderRadius.circular(9)),child:const Icon(Icons.layers_rounded,color:Colors.white,size:23)),
+          const SizedBox(width:13),const Text('ShopDesk',style:TextStyle(color:Colors.white,fontWeight:FontWeight.w800,fontSize:20)),
+          const Padding(padding:EdgeInsets.only(left:5,top:5),child:Text('PRO',style:TextStyle(color:Nexa.brightBlue,fontWeight:FontWeight.w800,fontSize:9))),
+        ])),
+        Expanded(child:ListView(padding:const EdgeInsets.symmetric(horizontal:16),children:[
+          for(final i in available)Padding(padding:const EdgeInsets.only(bottom:5),child:Material(
+            color:Colors.transparent,child:InkWell(borderRadius:BorderRadius.circular(9),onTap:()=>setState(()=>page=i),child:Container(
+              height:45,padding:const EdgeInsets.symmetric(horizontal:13),decoration:BoxDecoration(
+                gradient:i==page?Nexa.blueGradient:null,borderRadius:BorderRadius.circular(9)),
+              child:Row(children:[Icon(menu[i].icon,size:19,color:i==page?Nexa.white:Nexa.secondary),const SizedBox(width:14),Expanded(child:Text(menu[i].label,maxLines:1,overflow:TextOverflow.ellipsis,style:TextStyle(color:i==page?Nexa.white:Nexa.muted,fontSize:12,fontWeight:i==page?FontWeight.w700:FontWeight.w500)))]),
+            ))) )
+        ])),
+        Padding(padding:const EdgeInsets.fromLTRB(15,12,15,12),child:NexaPanel(padding:const EdgeInsets.all(13),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+          const Row(children:[Icon(Icons.verified_user_outlined,color:Nexa.orange,size:18),SizedBox(width:8),Text('License status',style:TextStyle(color:Nexa.white,fontSize:12,fontWeight:FontWeight.w700))]),
+          const SizedBox(height:11),const LicenseCountdown(compact:true),
+          const SizedBox(height:9),const Text('Offline • SQLite • Single PC',style:TextStyle(color:Nexa.secondary,fontSize:10)),
+        ]))),
+      ])),
+      Expanded(child:Column(children:[
+        Container(height:63,decoration:BoxDecoration(color:dark?Nexa.header:Colors.white,border:Border(bottom:BorderSide(color:dark?Nexa.outline:const Color(0xFFE8EDF5)))),padding:const EdgeInsets.symmetric(horizontal:22),child:Row(children:[
+          Expanded(child:Text(menu[page].label,style:TextStyle(fontSize:18,color:dark?Nexa.white:ink,fontWeight:FontWeight.w800))),
+          TextButton.icon(onPressed:()=>searchModules(available),icon:Icon(Icons.search,size:18,color:dark?Nexa.muted:ink),label:Text('Search modules...',style:TextStyle(fontSize:12,color:dark?Nexa.muted:ink))),
+          const SizedBox(width:9),IconButton(tooltip:'Refresh',onPressed:refresh,icon:Icon(Icons.refresh,size:19,color:dark?Nexa.muted:ink)),
+          const SizedBox(width:8),if(dark)const LicenseCountdown(compact:true),const SizedBox(width:8),Container(width:1,height:26,color:dark?Nexa.outline:const Color(0xFFE3E7F0)),const SizedBox(width:12),
+          const Icon(Icons.account_circle_outlined,color:Nexa.brightBlue,size:29),const SizedBox(width:9),
+          Text(core.current?.username??'',style:TextStyle(color:dark?Nexa.white:ink,fontWeight:FontWeight.w700,fontSize:12)),
+          IconButton(tooltip:'Sign out',onPressed:core.signOut,icon:Icon(Icons.logout,size:18,color:dark?Nexa.muted:ink)),
+        ])),
+        Expanded(child:KeyedSubtree(key:ValueKey('$page-$revision'),child:screen())),
+      ])),
+    ]));
+  }
+}
+
+class _ModuleSearchDelegate extends SearchDelegate<int?> {
+  final List<({String label,IconData icon})> items;
+  final List<int> available;
+  _ModuleSearchDelegate(this.items,this.available);
+  @override List<Widget> buildActions(BuildContext context)=>[IconButton(onPressed:()=>query='',icon:const Icon(Icons.clear))];
+  @override Widget buildLeading(BuildContext context)=>IconButton(onPressed:()=>close(context,null),icon:const Icon(Icons.arrow_back));
+  @override Widget buildResults(BuildContext context)=>buildSuggestions(context);
+  @override Widget buildSuggestions(BuildContext context){
+    final matches=available.where((i)=>items[i].label.toLowerCase().contains(query.trim().toLowerCase())).toList();
+    return ListView(children:[for(final i in matches)ListTile(leading:Icon(items[i].icon),title:Text(items[i].label),onTap:()=>close(context,i))]);
   }
 }
 

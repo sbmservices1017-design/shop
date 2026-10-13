@@ -1,4 +1,4 @@
-name: Build ShopDesk Windows EXE (v0.6.1)
+name: Build ShopDesk Windows EXE (v0.7.0)
 
 on:
   workflow_dispatch:
@@ -42,13 +42,15 @@ jobs:
           if (-not (Test-Path 'lib/commercial_core.dart')) { throw 'Commercial upgrade source missing' }
           if (-not (Test-Path 'lib/license_public.dart')) { throw 'License public key missing' }
           if (Test-Path 'shopdesk_license_private.pem') { throw 'PRIVATE SIGNING KEY MUST NEVER BE COMMITTED TO GITHUB' }
-          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.6.1'))) { throw 'ShopDesk v0.6.1 source version missing' }
+          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.7.0'))) { throw 'ShopDesk v0.7.0 source version missing' }
           if (-not (Test-Path 'lib/boot_setup.dart')) { throw 'First-launch setup module missing' }
           if (-not (Test-Path 'lib/settings_hub.dart')) { throw 'Settings hub module missing' }
           $settings = Get-Content 'lib/settings_hub.dart' -Raw
           if (-not $settings.Contains("import 'extensions.dart';")) { throw 'SettingsHub is missing extensions.dart import required by verifyDatabase().' }
           if (-not (Test-Path 'lib/license_widgets.dart')) { throw 'Live license status component missing' }
-          Write-Host 'ShopDesk v0.6.1 source layout confirmed'  
+          if (-not (Test-Path 'lib/nexa_theme.dart')) { throw 'NexaDash shared theme missing' }
+          if (-not ((Get-Content 'lib/advanced_dashboard.dart' -Raw).Contains('NexaPanel'))) { throw 'NexaDash dashboard missing' }
+          Write-Host 'ShopDesk v0.7.0 source layout confirmed'  
 
       - name: Generate native Windows files
         run: flutter create --platforms=windows --project-name shopdesk_flutter --no-pub .
@@ -72,7 +74,7 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: ShopDesk database and commercial regression tests
-        run: flutter test test/store_test.dart test/commercial_test.dart test/boot_setup_test.dart
+        run: flutter test test/store_test.dart test/commercial_test.dart test/boot_setup_test.dart test/nexa_ui_test.dart
 
       - name: Build Windows release
         run: flutter build windows --release

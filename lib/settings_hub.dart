@@ -8,6 +8,7 @@ import 'commercial_ui.dart';
 import 'license_widgets.dart';
 import 'store.dart';
 import 'extensions.dart'; // ShopDeskExtendedOperations.verifyDatabase
+import 'nexa_theme.dart';
 
 class SettingsHub extends StatefulWidget {
   const SettingsHub({super.key});
@@ -31,13 +32,17 @@ class _SettingsHubState extends State<SettingsHub> {
       3=>const LicenseSettings(),
       _=>const SystemInfo(),
     };
-    return LayoutBuilder(builder:(context,constraints){
+    return Theme(data:Theme.of(context).copyWith(
+      brightness:Brightness.dark,
+      colorScheme:ColorScheme.fromSeed(seedColor:Nexa.brightBlue,brightness:Brightness.dark,surface:Nexa.panel),
+      cardTheme:CardThemeData(color:Nexa.panel,elevation:0,shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(12))),
+    ),child:ColoredBox(color:Nexa.background,child:LayoutBuilder(builder:(context,constraints){
       final wide=constraints.maxWidth>=780;
       final menu=Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-        const Padding(padding:EdgeInsets.all(20),child:Text('SETTINGS',style:TextStyle(fontWeight:FontWeight.w800,color:Colors.blueGrey,letterSpacing:1.5))),
+        const Padding(padding:EdgeInsets.all(20),child:Text('SETTINGS',style:TextStyle(fontWeight:FontWeight.w800,color:Nexa.secondary,letterSpacing:1.5))),
         ...List.generate(options.length,(i)=>Padding(padding:const EdgeInsets.symmetric(horizontal:10,vertical:3),child:ListTile(
           shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(10)),selected:tab==i,
-          selectedTileColor:const Color(0xffe5eafc),leading:Icon(options[i].icon),title:Text(options[i].title,style:const TextStyle(fontSize:13)),
+          selectedTileColor:Nexa.brightBlue.withValues(alpha:.25),leading:Icon(options[i].icon),title:Text(options[i].title,style:const TextStyle(fontSize:13)),
           onTap:()=>setState(()=>tab=i)))),
       ]);
       return Column(children:[
@@ -47,7 +52,7 @@ class _SettingsHubState extends State<SettingsHub> {
           Expanded(child:screen),
         ])),
       ]);
-    });
+    })));
   }
 }
 

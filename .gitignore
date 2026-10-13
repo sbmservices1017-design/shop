@@ -1,0 +1,16 @@
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+coverage/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.backup
+*.pem
+*.p12
+*.pfx

@@ -7,6 +7,7 @@ import 'package:sqlite3/sqlite3.dart' as sqlite;
 import 'store.dart';
 import 'extensions.dart';
 import 'commercial_core.dart';
+import 'nexa_theme.dart';
 
 /// Restore is performed BEFORE the DB is opened by Store, never with live handles.
 class ShopDatabaseSetup {
@@ -133,17 +134,27 @@ class _ShopDeskBootstrapState extends State<ShopDeskBootstrap> {
   }
   @override Widget build(BuildContext context){
     if(ready)return widget.application();
-    if(loading)return const Scaffold(body:Center(child:CircularProgressIndicator()));
-    return Scaffold(backgroundColor:const Color(0xffeef2f9),body:Center(child:SingleChildScrollView(child:ConstrainedBox(constraints:const BoxConstraints(maxWidth:710),child:Card(child:Padding(padding:const EdgeInsets.all(36),child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-      const Icon(Icons.storefront_rounded,color:Color(0xff4157df),size:58),
-      const SizedBox(height:12),const Text('Welcome to ShopDesk Pro',textAlign:TextAlign.center,style:TextStyle(fontSize:27,fontWeight:FontWeight.w800)),
-      const SizedBox(height:6),const Text('First-time setup · choose how to start',textAlign:TextAlign.center,style:TextStyle(color:Colors.blueGrey)),
-      const SizedBox(height:32),
-      FilledButton.icon(onPressed:busy?null:createNew,icon:const Icon(Icons.add_circle_outline),label:const Padding(padding:EdgeInsets.all(14),child:Text('Create new shop database'))),
-      const SizedBox(height:12),OutlinedButton.icon(onPressed:busy?null:restore,icon:const Icon(Icons.restore_outlined),label:const Padding(padding:EdgeInsets.all(14),child:Text('Restore existing ShopDesk backup'))),
-      const SizedBox(height:22),const Text('New shop: create an owner account to start your 48-hour trial. Restore: previous shop data and users are retained. This setup screen will not appear again after a database is created.',style:TextStyle(color:Colors.blueGrey,fontSize:12)),
-      if(error!=null)...[const SizedBox(height:16),SelectableText(error!,style:const TextStyle(color:Colors.red))],
-      if(busy)...[const SizedBox(height:16),const LinearProgressIndicator()],
-    ])))))));
+    if(loading)return const Scaffold(backgroundColor:Nexa.background,body:Center(child:CircularProgressIndicator(color:Nexa.brightBlue)));
+    return NexaAuthLayout(
+      heading:'Welcome to ShopDesk Pro',
+      subtitle:'First-time setup: start with an empty database or recover an existing ShopDesk backup.',
+      icon:Icons.layers_rounded,maxWidth:680,
+      child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+        _setupChoice(Icons.add_box_outlined,'Create New Database','Set up a fresh local shop, then register its owner.',busy?null:createNew),
+        const SizedBox(height:14),
+        _setupChoice(Icons.restore_page_outlined,'Restore From Backup','Import a compatible ShopDesk SQLite backup, keeping previous accounts and data.',busy?null:restore),
+        const SizedBox(height:18),
+        const Text('This screen appears once for a new installation. Later launches will open the login or activation screen.',style:TextStyle(color:Nexa.muted,fontSize:11,height:1.5)),
+        if(error!=null)...[const SizedBox(height:14),SelectableText(error!,style:const TextStyle(color:Nexa.orange))],
+        if(busy)...[const SizedBox(height:14),const LinearProgressIndicator(color:Nexa.brightBlue)],
+      ]),
+    );
   }
+  Widget _setupChoice(IconData icon,String title,String description,VoidCallback? tap)=>Material(color:Colors.transparent,child:InkWell(onTap:tap,borderRadius:BorderRadius.circular(12),child:Container(
+    padding:const EdgeInsets.all(16),decoration:BoxDecoration(color:Nexa.panelTop,border:Border.all(color:Nexa.outline),borderRadius:BorderRadius.circular(12)),
+    child:Row(children:[Container(width:50,height:50,decoration:BoxDecoration(color:Nexa.brightBlue.withValues(alpha:.18),borderRadius:BorderRadius.circular(10)),child:Icon(icon,color:Nexa.brightBlue,size:25)),
+      const SizedBox(width:15),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(title,style:const TextStyle(color:Nexa.white,fontWeight:FontWeight.w800,fontSize:15)),const SizedBox(height:5),Text(description,style:const TextStyle(color:Nexa.muted,fontSize:11))])),
+      const Icon(Icons.arrow_forward_ios,color:Nexa.secondary,size:16),
+    ]),
+  )));
 }

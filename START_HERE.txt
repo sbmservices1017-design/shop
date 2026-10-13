@@ -1,3 +1,12 @@
+SHOPDESK PRO v0.7.0 NEXADASH UI UPDATE
+
+Copy all files INSIDE the ShopDesk folder to the ROOT of a new GitHub branch.
+Do not upload the ShopDesk folder as an extra nested folder.
+Run GitHub Actions: Build ShopDesk Windows EXE (v0.7.0).
+Use a copy of your SQLite database for testing.
+
+See docs/UI_DESIGN_AND_BUILD_V0_7.md for changes and safe migration steps.
+
 ShopDesk Pro v0.6.0 integrated Flutter Windows source.
 Read README.md first.
 Upload ShopDesk/ contents to GitHub repository root (new branch), run the v0.6 Windows Actions build and test on a COPY of shop data.

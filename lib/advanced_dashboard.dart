@@ -1,144 +1,283 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'store.dart';
-import 'license_widgets.dart';
+import 'nexa_theme.dart';
 
-/// Real-time local dashboard: refreshes from SQLite every 5 seconds.
-/// Financial margin/COGS is intentionally not claimed without verified costing.
+/// NexaDash-inspired desktop layout. All figures come from the existing
+/// ShopDesk SQLite tables. Refresh: every five seconds and after transactions.
+/// Profit is deliberately excluded until stock costing is implemented.
 class AdvancedDashboard extends StatefulWidget {
   final int revision;
-  const AdvancedDashboard({super.key,required this.revision});
-  @override State<AdvancedDashboard> createState()=>_AdvancedDashboardState();
+  const AdvancedDashboard({super.key, required this.revision});
+  @override State<AdvancedDashboard> createState() => _AdvancedDashboardState();
 }
-class _AdvancedDashboardState extends State<AdvancedDashboard>{
+
+class _AdvancedDashboardState extends State<AdvancedDashboard> {
   Timer? ticker;
-  late Future<List<List<Map<String,Object?>>>> future;
-  @override void initState(){super.initState();future=load();ticker=Timer.periodic(const Duration(seconds:5),(_){if(mounted)setState(()=>future=load());});}
-  @override void didUpdateWidget(covariant AdvancedDashboard oldWidget){super.didUpdateWidget(oldWidget);if(oldWidget.revision!=widget.revision)future=load();}
-  @override void dispose(){ticker?.cancel();super.dispose();}
-  Future<List<List<Map<String,Object?>>>> load()async {
-    final s=Store.instance;
-    final today=nowDate();
-    final since=DateTime.now().subtract(const Duration(days:13)).toIso8601String().substring(0,10);
+  int rangeDays = 30;
+  late Future<List<List<Map<String, Object?>>>> results;
+  final colors = const [Nexa.brightBlue, Nexa.purple, Nexa.orange, Nexa.green, Nexa.pink];
+
+  @override void initState() {
+    super.initState();
+    results = load();
+    ticker = Timer.periodic(const Duration(seconds: 5), (_) {
+      if(mounted) setState(() => results = load());
+    });
+  }
+  @override void didUpdateWidget(covariant AdvancedDashboard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.revision != widget.revision) results = load();
+  }
+  @override void dispose() { ticker?.cancel(); super.dispose(); }
+
+  Future<List<List<Map<String, Object?>>>> load() async {
+    final s = Store.instance;
+    final now = DateTime.now();
+    final since = DateFormat('yyyy-MM-dd').format(now.subtract(Duration(days: rangeDays - 1)));
+    final until = DateFormat('yyyy-MM-dd').format(now);
     return Future.wait([
-      s.read("SELECT coalesce(sum(total),0) n FROM documents WHERE kind='sale' AND date=? AND status='POSTED'",[today]),
-      s.read("SELECT coalesce(sum(total),0) n FROM documents WHERE kind='purchase' AND date=? AND status='POSTED'",[today]),
+      s.read("SELECT coalesce(sum(total),0) n FROM documents WHERE kind='sale' AND date>=? AND date<=? AND status='POSTED'",[since,until]),
+      s.read("SELECT coalesce(sum(total),0) n FROM documents WHERE kind='purchase' AND date>=? AND date<=? AND status='POSTED'",[since,until]),
       s.read('SELECT count(*) n FROM variants WHERE active=1'),
       s.read('SELECT count(*) n FROM (SELECT v.id FROM variants v LEFT JOIN stock_movements m ON m.variant_id=v.id WHERE v.active=1 GROUP BY v.id HAVING coalesce(sum(m.qty),0)<=0)'),
       s.read("SELECT coalesce(sum(CASE WHEN p.kind='customer' THEN l.debit-l.credit ELSE 0 END),0) n FROM party_ledger l JOIN parties p ON p.id=l.party_id"),
       s.read("SELECT coalesce(sum(CASE WHEN p.kind='supplier' THEN l.credit-l.debit ELSE 0 END),0) n FROM party_ledger l JOIN parties p ON p.id=l.party_id"),
-      s.read("SELECT coalesce(sum(e.amount),0) n FROM expenses e WHERE e.date=? AND NOT EXISTS (SELECT 1 FROM reversed_transactions r WHERE r.kind='expense' AND r.source_id=e.id)",[today]),
-      s.read("SELECT date,kind,sum(total) total FROM documents WHERE status='POSTED' AND date>=? GROUP BY date,kind ORDER BY date",[since]),
-      s.read("SELECT d.invoice,d.date,d.kind,d.total,coalesce(p.name,'Walk-in') party FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE d.status='POSTED' ORDER BY d.id DESC LIMIT 7"),
+      s.read("SELECT coalesce(sum(e.amount),0) n FROM expenses e WHERE e.date>=? AND e.date<=? AND NOT EXISTS (SELECT 1 FROM reversed_transactions r WHERE r.kind='expense' AND r.source_id=e.id)",[since,until]),
+      s.read("SELECT date,kind,sum(total) total FROM documents WHERE status='POSTED' AND date>=? AND date<=? GROUP BY date,kind ORDER BY date",[since,until]),
+      s.read("SELECT d.invoice,d.date,d.kind,d.total,d.paid,coalesce(p.name,'Walk-in') party FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE d.status='POSTED' ORDER BY d.id DESC LIMIT 6"),
       s.read('SELECT c.name name,coalesce(sum(m.qty),0) qty FROM categories c JOIN products p ON p.category_id=c.id JOIN variants v ON v.product_id=p.id LEFT JOIN stock_movements m ON m.variant_id=v.id GROUP BY c.id ORDER BY abs(qty) DESC LIMIT 6'),
-      s.read("SELECT c.name name,coalesce(sum(e.amount),0) amount FROM expenses e JOIN expense_categories c ON e.category_id=c.id WHERE e.date>=date('now','start of month') AND NOT EXISTS (SELECT 1 FROM reversed_transactions r WHERE r.kind='expense' AND r.source_id=e.id) GROUP BY c.id ORDER BY amount DESC LIMIT 6"),
+      s.read("SELECT c.name name,coalesce(sum(e.amount),0) amount FROM expenses e JOIN expense_categories c ON e.category_id=c.id WHERE e.date>=? AND e.date<=? AND NOT EXISTS (SELECT 1 FROM reversed_transactions r WHERE r.kind='expense' AND r.source_id=e.id) GROUP BY c.id ORDER BY amount DESC LIMIT 6",[since,until]),
       s.read("SELECT CASE WHEN paid>=total THEN 'Paid' WHEN paid>0 THEN 'Partially Paid' ELSE 'Unpaid' END status,count(*) n FROM documents WHERE kind='sale' AND status='POSTED' GROUP BY 1"),
-      s.read("SELECT p.name name,coalesce(sum(l.qty),0) qty FROM document_lines l JOIN documents d ON d.id=l.document_id JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id WHERE d.kind='sale' AND d.status='POSTED' GROUP BY p.id ORDER BY qty DESC LIMIT 5"),
-      s.read("SELECT count(*) n FROM documents WHERE kind='sale' AND date=? AND status='POSTED'",[today]),
+      s.read("SELECT p.name name,coalesce(sum(l.qty),0) qty,coalesce(sum(l.amount),0) revenue FROM document_lines l JOIN documents d ON d.id=l.document_id JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id WHERE d.kind='sale' AND d.status='POSTED' AND d.date>=? AND d.date<=? GROUP BY p.id ORDER BY qty DESC LIMIT 5",[since,until]),
+      s.read("SELECT count(*) n FROM documents WHERE kind='sale' AND date>=? AND date<=? AND status='POSTED'",[since,until]),
+      s.read("SELECT c.name name,coalesce(sum(l.amount),0) amount FROM document_lines l JOIN documents d ON d.id=l.document_id JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id JOIN categories c ON c.id=p.category_id WHERE d.kind='sale' AND d.status='POSTED' AND d.date>=? AND d.date<=? GROUP BY c.id ORDER BY amount DESC LIMIT 5",[since,until]),
+      s.read("SELECT count(*) n FROM parties WHERE kind='customer'"),
     ]);
   }
-  String rs(Object? amount)=>'Rs. ${(numVal(amount)/100).toStringAsFixed(0)}';
-  Widget card(String title,String value,IconData icon,Color color,{String? sub})=>Container(
-    width:225,padding:const EdgeInsets.all(20),decoration:BoxDecoration(color:Colors.white,borderRadius:BorderRadius.circular(18),border:Border.all(color:const Color(0xffe9edf5))),
-    child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-      Container(padding:const EdgeInsets.all(10),decoration:BoxDecoration(color:color.withValues(alpha:0.1),borderRadius:BorderRadius.circular(12)),child:Icon(icon,color:color,size:22)),
-      const SizedBox(height:13),Text(title,style:const TextStyle(color:Color(0xff758199),fontSize:12,fontWeight:FontWeight.w600)),
-      const SizedBox(height:5),Text(value,style:const TextStyle(fontSize:22,fontWeight:FontWeight.w900,color:Color(0xff1b2940))),
-      if(sub!=null)...[const SizedBox(height:4),Text(sub,style:const TextStyle(fontSize:10,color:Colors.blueGrey))]
-    ]));
-  Widget surface(String title,Widget child,{String? subtitle})=>Container(
-    padding:const EdgeInsets.all(20),decoration:BoxDecoration(color:Colors.white,borderRadius:BorderRadius.circular(17),border:Border.all(color:const Color(0xffe9edf5))),
-    child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[Text(title,style:const TextStyle(fontSize:16,fontWeight:FontWeight.w800)),
-      if(subtitle!=null)...[const SizedBox(height:4),Text(subtitle,style:const TextStyle(color:Colors.blueGrey,fontSize:11))],
-      const SizedBox(height:16),child]));
-  Widget bars(List<Map<String,Object?>> rows,String amountField,Color shade,{bool currency=false}){
-    final max=rows.fold<double>(1,(v,r)=>math.max(v,numVal(r[amountField]).abs()));
-    if(rows.isEmpty)return const Text('No transactions yet.',style:TextStyle(color:Colors.blueGrey));
-    return Column(children:rows.map((r){final val=numVal(r[amountField]);
-      return Padding(padding:const EdgeInsets.only(bottom:13),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-        Row(children:[Expanded(child:Text('${r['name']}',overflow:TextOverflow.ellipsis,style:const TextStyle(fontSize:12,fontWeight:FontWeight.w600))),const SizedBox(width:8),Text(currency?rs(val):val.toStringAsFixed(1),style:const TextStyle(fontSize:11,color:Colors.blueGrey))]),
-        const SizedBox(height:6),ClipRRect(borderRadius:BorderRadius.circular(4),child:LinearProgressIndicator(value:val.abs()/max,minHeight:8,color:val<0?Colors.deepOrange:shade,backgroundColor:const Color(0xffeef2fa)))
+
+  String money(Object? cents) => 'Rs. ${NumberFormat('#,##0').format(numVal(cents)/100)}';
+  String number(Object? v) => NumberFormat('#,##0.##').format(numVal(v));
+
+  Widget sectionTitle(String heading, {Widget? trailing}) => Row(children:[
+    Expanded(child: Text(heading, style: const TextStyle(color:Nexa.white,fontSize:18,fontWeight:FontWeight.w800))),
+    if(trailing!=null)trailing,
+  ]);
+
+  Widget statistic(String label, String value, IconData icon, Color tint, String note) => NexaPanel(
+    padding: const EdgeInsets.all(18), child: SizedBox(height:102, child:Row(crossAxisAlignment: CrossAxisAlignment.start,children:[
+      Container(width:54,height:54,decoration:BoxDecoration(color:tint,borderRadius:BorderRadius.circular(12)),child:Icon(icon,color:Colors.white,size:26)),
+      const SizedBox(width:16),
+      Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+        Text(label,style:const TextStyle(color:Nexa.muted,fontSize:13)),
+        const SizedBox(height:8),
+        FittedBox(fit:BoxFit.scaleDown,alignment:Alignment.centerLeft,child:Text(value,style:const TextStyle(color:Nexa.white,fontSize:25,fontWeight:FontWeight.w800))),
+        const Spacer(),
+        Text(note,style:const TextStyle(color:Nexa.secondary,fontSize:11),overflow:TextOverflow.ellipsis),
+      ])),
+      const Icon(Icons.more_horiz,color:Nexa.secondary,size:17),
+    ])));
+
+  Widget panel(String title,Widget body,{String? description})=>NexaPanel(
+    child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+      sectionTitle(title),if(description!=null)...[const SizedBox(height:5),Text(description,style:const TextStyle(color:Nexa.secondary,fontSize:11))],
+      const SizedBox(height:18),body,
+    ]),
+  );
+
+  Widget barRows(List<Map<String,Object?>> rows,String amountKey,Color shade,{bool inMoney=false}) {
+    if(rows.isEmpty)return const Text('No records for this period',style:TextStyle(color:Nexa.muted,fontSize:12));
+    final max=rows.fold<double>(1,(v,r)=>math.max(v,numVal(r[amountKey]).abs()));
+    return Column(children:rows.map((r){final val=numVal(r[amountKey]);return Padding(
+      padding:const EdgeInsets.only(bottom:14),child:Column(children:[
+        Row(children:[Expanded(child:Text('${r['name']}',overflow:TextOverflow.ellipsis,style:const TextStyle(color:Nexa.muted,fontSize:12))),Text(inMoney?money(val):number(val),style:const TextStyle(color:Nexa.white,fontSize:12,fontWeight:FontWeight.w600))]),
+        const SizedBox(height:8),ClipRRect(borderRadius:BorderRadius.circular(4),child:LinearProgressIndicator(value:val.abs()/max,minHeight:7,color:val<0?Nexa.orange:shade,backgroundColor:Nexa.outline)),
       ]));}).toList());
   }
-  @override Widget build(BuildContext context)=>FutureBuilder<List<List<Map<String,Object?>>>>(future:future,builder:(context,snapshot){
-    if(snapshot.hasError)return Center(child:SelectableText('Dashboard data could not load: ${snapshot.error}'));
-    if(!snapshot.hasData)return const Center(child:CircularProgressIndicator());
-    final data=snapshot.data!;
-    double metric(int index)=>numVal(data[index].first['n']);
-    final sales={for(final row in data[7].where((x)=>x['kind']=='sale'))'${row['date']}':numVal(row['total'])/100};
-    final purchases={for(final row in data[7].where((x)=>x['kind']=='purchase'))'${row['date']}':numVal(row['total'])/100};
-    final labels=List.generate(14,(i)=>DateTime.now().subtract(Duration(days:13-i)).toIso8601String().substring(0,10));
-    final salePoints=labels.map((d)=>sales[d]??0.0).toList();
-    final purchasePoints=labels.map((d)=>purchases[d]??0.0).toList();
-    final paymentRows=data[11];
-    final cardItems=[
-      ('Today Sales',rs(metric(0)),Icons.trending_up_rounded,const Color(0xff2ca979),'Confirmed invoices'),
-      ('Today Purchases',rs(metric(1)),Icons.shopping_bag_outlined,const Color(0xff5267e7),'Purchase invoices'),
-      ('Today Expenses',rs(metric(6)),Icons.account_balance_wallet_outlined,const Color(0xffe99a3b),'Expense entries'),
-      ('Invoices Today','${metric(13).toInt()}',Icons.receipt_long_outlined,const Color(0xff9772e2),'Sales count'),
-      ('Product Variants','${metric(2).toInt()}',Icons.inventory_2_outlined,const Color(0xff337bb8),'Active SKUs'),
-      ('Low / Negative','${metric(3).toInt()}',Icons.warning_amber_outlined,const Color(0xffef7559),'Zero or below'),
-      ('Customer Due',rs(metric(4)),Icons.people_outline,const Color(0xff17a6a6),'Outstanding ledger'),
-      ('Supplier Due',rs(metric(5)),Icons.local_shipping_outlined,const Color(0xff9654c6),'Outstanding ledger'),
-    ];
-    return LayoutBuilder(builder:(context,layout){
-      final innerWidth=math.max(350.0,layout.maxWidth-48);
-      final width=innerWidth>=960?(innerWidth-12)/2:innerWidth;
-      return ListView(padding:const EdgeInsets.all(24),children:[
-        Container(padding:const EdgeInsets.all(22),decoration:BoxDecoration(gradient:const LinearGradient(colors:[Color(0xff182743),Color(0xff334f94)]),borderRadius:BorderRadius.circular(20)),
-          child:Wrap(crossAxisAlignment:WrapCrossAlignment.center,runSpacing:12,spacing:25,alignment:WrapAlignment.spaceBetween,children:[
-            const Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Business Overview',style:TextStyle(color:Colors.white,fontSize:25,fontWeight:FontWeight.w900)),
-              SizedBox(height:6),Text('Live inventory • Sales • Purchases • Accounts',style:TextStyle(color:Color(0xffd3def6),fontSize:12))]),
-            const LicenseCountdown(),
-          ])),
-        const SizedBox(height:20),
-        Wrap(spacing:12,runSpacing:12,children:cardItems.map((c)=>card(c.$1,c.$2,c.$3,c.$4,sub:c.$5)).toList()),
-        const SizedBox(height:18),
-        Wrap(spacing:12,runSpacing:12,children:[
-          SizedBox(width:width,child:surface('Sales vs Purchases',Column(children:[
-            SizedBox(height:205,child:CustomPaint(painter:_TrendPainter(salePoints,purchasePoints),child:const SizedBox.expand())),
-            const SizedBox(height:9),const Row(mainAxisAlignment:MainAxisAlignment.center,children:[Icon(Icons.circle,size:9,color:Color(0xff5267e7)),SizedBox(width:5),Text('Sales',style:TextStyle(fontSize:11)),SizedBox(width:20),Icon(Icons.circle,size:9,color:Color(0xff2ca979)),SizedBox(width:5),Text('Purchases',style:TextStyle(fontSize:11))]),
-          ]),subtitle:'Last 14 days · live from posted invoices')),
-          SizedBox(width:width,child:surface('Stock by Category',bars(data[9],'qty',const Color(0xff5972e9)),subtitle:'Current units by category · orange bars indicate negative stock')),
-          SizedBox(width:width,child:surface('Expenses by Category',bars(data[10],'amount',const Color(0xffe99a3b),currency:true),subtitle:'This month')),
-          SizedBox(width:width,child:surface('Payment Status',Column(children:[...paymentRows.map((r)=>ListTile(dense:true,contentPadding:EdgeInsets.zero,leading:Icon(r['status']=='Paid'?Icons.check_circle:r['status']=='Partially Paid'?Icons.timelapse:Icons.pending_outlined,color:r['status']=='Paid'?Colors.green:Colors.orange),title:Text('${r['status']}'),trailing:Text('${r['n']} bills',style:const TextStyle(fontWeight:FontWeight.w700)))),if(paymentRows.isEmpty)const Text('No bills yet')]),subtitle:'Sales invoice payment breakdown')),
-          SizedBox(width:width,child:surface('Top Selling Products',bars(data[12],'qty',const Color(0xff26a6a8)),subtitle:'Units sold (all time)')),
-          SizedBox(width:width,child:surface('Customer vs Supplier Outstanding',Column(children:[bars([
-            {'name':'Customer receivables','amount':metric(4)},
-            {'name':'Supplier payables','amount':metric(5)}], 'amount',const Color(0xff5972e9),currency:true)]),subtitle:'From customer & supplier ledgers')),
-        ]),
-        const SizedBox(height:18),surface('Recent Sales & Purchases',data[8].isEmpty?const Text('No transactions yet'):Column(children:data[8].map((r)=>ListTile(
-          leading:CircleAvatar(backgroundColor:const Color(0xffedf2fc),child:Icon(r['kind']=='sale'?Icons.point_of_sale:Icons.shopping_cart_outlined,size:19,color:const Color(0xff5267e7))),
-          title:Text('${r['invoice']}   •   ${r['party']}',style:const TextStyle(fontSize:12,fontWeight:FontWeight.w600)),
-          subtitle:Text('${r['date']}  ·  ${r['kind']}',style:const TextStyle(fontSize:11)),trailing:Text(rs(r['total']),style:const TextStyle(fontWeight:FontWeight.w800,fontSize:12)))).toList())),
-        const SizedBox(height:15),const Text('Business amounts and stock refresh automatically every 5 seconds. License countdown updates every second. Profit/COGS is not shown until costing is verified.',style:TextStyle(color:Colors.blueGrey,fontSize:11))
+
+  Widget donut(List<Map<String,Object?>> categoryRows){
+    final categories=categoryRows.where((r)=>numVal(r['amount'])>0).toList();
+    final sum=categories.fold<double>(0,(v,r)=>v+numVal(r['amount']));
+    return SizedBox(height:240,child:LayoutBuilder(builder:(context,c){
+      final horizontal=c.maxWidth>390;
+      final chart=SizedBox(width:200,height:200,child:Stack(alignment:Alignment.center,children:[
+        CustomPaint(size:const Size(200,200),painter:_DonutPainter(categories.map((e)=>numVal(e['amount'])).toList(),colors)),
+        Column(mainAxisSize:MainAxisSize.min,children:[Text(money(sum),style:const TextStyle(color:Nexa.white,fontWeight:FontWeight.w800,fontSize:17)),const Text('Total Sales',style:TextStyle(color:Nexa.muted,fontSize:11))]),
+      ]));
+      final legend=Column(mainAxisAlignment:MainAxisAlignment.center,crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+        if(categories.isEmpty)const Text('No sales yet',style:TextStyle(color:Nexa.muted,fontSize:12)),
+        for(var i=0;i<categories.length;i++)Padding(padding:const EdgeInsets.symmetric(vertical:7),child:Row(children:[
+          Container(width:12,height:12,decoration:BoxDecoration(color:colors[i%colors.length],borderRadius:BorderRadius.circular(4))),
+          const SizedBox(width:9),Expanded(child:Text('${categories[i]['name']}',maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:Nexa.muted,fontSize:11))),
+          Text('${(100*numVal(categories[i]['amount'])/sum).toStringAsFixed(0)}%',style:const TextStyle(color:Nexa.white,fontWeight:FontWeight.w700,fontSize:11)),
+        ])),
       ]);
-    });
-  });
+      return horizontal?Row(children:[Expanded(flex:5,child:Center(child:chart)),const SizedBox(width:16),Expanded(flex:4,child:legend)]):Column(children:[Expanded(child:FittedBox(child:chart)),const SizedBox(height:8),SizedBox(height:80,child:SingleChildScrollView(child:legend))]);
+    }));
+  }
+
+  Widget recentTable(List<Map<String,Object?>> rows){
+    if(rows.isEmpty)return const Padding(padding:EdgeInsets.all(20),child:Text('No sales or purchases yet',style:TextStyle(color:Nexa.muted)));
+    return Column(children:[
+      const _TableHeader(['Invoice','Customer / Supplier','Type','Amount','Status'],[3,4,2,2,2]),
+      for(final r in rows)Container(decoration:const BoxDecoration(border:Border(bottom:BorderSide(color:Nexa.outline,width:.6))),padding:const EdgeInsets.symmetric(vertical:13,horizontal:10),child:Row(children:[
+        _cell('${r['invoice']}',3,Nexa.white),_cell('${r['party']}',4,Nexa.muted),
+        _cell('${r['kind']}'.toUpperCase(),2,Nexa.muted),
+        _cell(money(r['total']),2,Nexa.white),
+        Expanded(flex:2,child:Align(alignment:Alignment.centerLeft,child:Container(padding:const EdgeInsets.symmetric(horizontal:8,vertical:5),decoration:BoxDecoration(color:(numVal(r['paid'])>=numVal(r['total'])?Nexa.green:Nexa.orange).withValues(alpha:.16),borderRadius:BorderRadius.circular(14)),child:Text(numVal(r['paid'])>=numVal(r['total'])?'PAID':numVal(r['paid'])>0?'PARTIAL':'UNPAID',style:TextStyle(color:numVal(r['paid'])>=numVal(r['total'])?Nexa.green:Nexa.orange,fontSize:9,fontWeight:FontWeight.w800))))),
+      ])),
+    ]);
+  }
+  Widget _cell(String text,int flex,Color c)=>Expanded(flex:flex,child:Text(text,maxLines:1,overflow:TextOverflow.ellipsis,style:TextStyle(color:c,fontSize:11,fontWeight:FontWeight.w600)));
+
+  Widget topTable(List<Map<String,Object?>> rows){
+    if(rows.isEmpty)return const Padding(padding:EdgeInsets.all(20),child:Text('No sales in selected period',style:TextStyle(color:Nexa.muted)));
+    return Column(children:[
+      const _TableHeader(['#','Product','Units sold','Revenue'],[1,5,2,3]),
+      for(var i=0;i<rows.length;i++)Container(decoration:const BoxDecoration(border:Border(bottom:BorderSide(color:Nexa.outline,width:.6))),padding:const EdgeInsets.symmetric(vertical:12,horizontal:10),child:Row(children:[
+        _cell('${i+1}',1,Nexa.muted),
+        Expanded(flex:5,child:Row(children:[Container(width:26,height:26,decoration:BoxDecoration(color:Nexa.outline,borderRadius:BorderRadius.circular(6)),child:const Icon(Icons.inventory_2_outlined,color:Nexa.muted,size:15)),const SizedBox(width:8),Expanded(child:Text('${rows[i]['name']}',maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:Nexa.white,fontSize:11)))])),
+        _cell(number(rows[i]['qty']),2,Nexa.muted),_cell(money(rows[i]['revenue']),3,Nexa.white),
+      ])),
+    ]);
+  }
+
+  @override Widget build(BuildContext context) => FutureBuilder<List<List<Map<String,Object?>>>>(
+    future:results,builder:(context,snapshot){
+      if(snapshot.hasError)return Center(child:SelectableText('Dashboard data could not load: ${snapshot.error}',style:const TextStyle(color:Nexa.orange)));
+      if(!snapshot.hasData)return const Center(child:CircularProgressIndicator(color:Nexa.brightBlue));
+      final data=snapshot.data!;
+      double metric(int index)=>numVal(data[index].first['n']);
+      final sales={for(final r in data[7].where((x)=>x['kind']=='sale')) '${r['date']}':numVal(r['total'])/100};
+      final purchases={for(final r in data[7].where((x)=>x['kind']=='purchase')) '${r['date']}':numVal(r['total'])/100};
+      final labels=List.generate(rangeDays,(i)=>DateFormat('yyyy-MM-dd').format(DateTime.now().subtract(Duration(days:rangeDays-1-i))));
+      final salePoints=labels.map((d)=>sales[d]??0.0).toList();
+      final purchasePoints=labels.map((d)=>purchases[d]??0.0).toList();
+      return LayoutBuilder(builder:(context,layout){
+        final usable=math.max(330.0,layout.maxWidth-44);
+        final count=usable>=1060?4:usable>=600?2:1;
+        final cardWidth=(usable-12*(count-1))/count;
+        final wide=usable>=880;
+        final big=wide?(usable-14)*0.59:usable;
+        final small=wide?(usable-14)*0.41:usable;
+        return Container(decoration:const BoxDecoration(gradient:Nexa.pageGradient),child:ListView(padding:const EdgeInsets.all(22),children:[
+          Row(children:[Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+            const Text('Dashboard',style:TextStyle(color:Nexa.white,fontSize:29,fontWeight:FontWeight.w800)),
+            const SizedBox(height:4),const Text('Your shop performance, updated from live SQLite data.',style:TextStyle(color:Nexa.muted,fontSize:13)),
+          ])),
+            Container(padding:const EdgeInsets.symmetric(horizontal:10),decoration:BoxDecoration(color:Nexa.panel,border:Border.all(color:Nexa.outline),borderRadius:BorderRadius.circular(9)),child:DropdownButtonHideUnderline(child:DropdownButton<int>(value:rangeDays,dropdownColor:Nexa.panel,iconEnabledColor:Nexa.muted,style:const TextStyle(color:Nexa.white,fontSize:12),items:const [DropdownMenuItem(value:7,child:Text('Last 7 Days')),DropdownMenuItem(value:14,child:Text('Last 14 Days')),DropdownMenuItem(value:30,child:Text('Last 30 Days'))],onChanged:(v){if(v!=null)setState((){rangeDays=v;results=load();});}))),
+          ]),
+          const SizedBox(height:18),
+          Wrap(spacing:12,runSpacing:12,children:[
+            SizedBox(width:cardWidth,child:statistic('Total Sales',money(metric(0)),Icons.currency_rupee,Nexa.brightBlue,'Selected period')),
+            SizedBox(width:cardWidth,child:statistic('Sales Invoices',number(metric(13)),Icons.shopping_cart_outlined,Nexa.green,'Posted sales')),
+            SizedBox(width:cardWidth,child:statistic('Customers',number(metric(15)),Icons.people_alt_outlined,Nexa.purple,'Registered customers')),
+            SizedBox(width:cardWidth,child:statistic('Total Purchases',money(metric(1)),Icons.trending_up,Nexa.orange,'Selected period')),
+          ]),
+          const SizedBox(height:16),
+          Wrap(spacing:14,runSpacing:14,children:[
+            SizedBox(width:big,child:panel('Revenue Overview',Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Text(money(metric(0)),style:const TextStyle(color:Nexa.white,fontSize:27,fontWeight:FontWeight.w800)),
+              const SizedBox(height:17),
+              SizedBox(height:204,child:CustomPaint(painter:_TrendPainter(salePoints,purchasePoints),child:const SizedBox.expand())),
+              const SizedBox(height:11),const Row(children:[_Legend('Sales',Nexa.brightBlue),SizedBox(width:16),_Legend('Purchases',Nexa.green)]),
+            ]),description:'Sales and purchase trends over the selected period')),
+            SizedBox(width:small,child:panel('Sales by Category',donut(data[14]),description:'Posted sales grouped by product category')),
+          ]),
+          const SizedBox(height:16),
+          Wrap(spacing:14,runSpacing:14,children:[
+            SizedBox(width:big,child:panel('Recent Orders',recentTable(data[8]),description:'Most recent posted sales and purchases')),
+            SizedBox(width:small,child:panel('Top Selling Products',topTable(data[12]),description:'Most sold products in selected period')),
+          ]),
+          const SizedBox(height:16),
+          Wrap(spacing:14,runSpacing:14,children:[
+            SizedBox(width:big,child:panel('Expenses by Category',barRows(data[10],'amount',Nexa.orange,inMoney:true),description:'Expenses in the selected period')),
+            SizedBox(width:small,child:panel('Stock & Outstanding',Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+              _InfoRow('Active SKUs',number(metric(2)),Nexa.brightBlue),
+              _InfoRow('Zero / Negative Stock',number(metric(3)),Nexa.orange),
+              _InfoRow('Customer Receivables',money(metric(4)),Nexa.green),
+              _InfoRow('Supplier Payables',money(metric(5)),Nexa.purple),
+              _InfoRow('Expenses',money(metric(6)),Nexa.pink),
+            ]),description:'Live stock and ledger balances')),
+          ]),
+          const SizedBox(height:15),
+          const Text('Live business figures refresh every 5 seconds. License countdown refreshes every second. Profit is not shown until COGS is verified.',style:TextStyle(color:Nexa.secondary,fontSize:10)),
+        ]));
+      });
+    },
+  );
+}
+
+class _Legend extends StatelessWidget {
+  final String name;final Color color;
+  const _Legend(this.name,this.color);
+  @override Widget build(BuildContext context)=>Row(mainAxisSize:MainAxisSize.min,children:[CircleAvatar(radius:4,backgroundColor:color),const SizedBox(width:6),Text(name,style:const TextStyle(color:Nexa.muted,fontSize:11))]);
+}
+class _InfoRow extends StatelessWidget {
+  final String name,value;final Color color;
+  const _InfoRow(this.name,this.value,this.color);
+  @override Widget build(BuildContext context)=>Padding(padding:const EdgeInsets.symmetric(vertical:10),child:Row(children:[CircleAvatar(radius:5,backgroundColor:color),const SizedBox(width:9),Expanded(child:Text(name,style:const TextStyle(color:Nexa.muted,fontSize:11))),Text(value,style:const TextStyle(color:Nexa.white,fontSize:12,fontWeight:FontWeight.w700))]));
+}
+class _TableHeader extends StatelessWidget {
+  final List<String> columns;final List<int> flexes;
+  const _TableHeader(this.columns,this.flexes);
+  @override Widget build(BuildContext context)=>Container(padding:const EdgeInsets.symmetric(vertical:12,horizontal:10),decoration:BoxDecoration(color:Nexa.panelTop,borderRadius:BorderRadius.circular(8)),child:Row(children:[for(var i=0;i<columns.length;i++)Expanded(flex:flexes[i],child:Text(columns[i],style:const TextStyle(color:Nexa.muted,fontSize:10)))]));
+}
+
+class _DonutPainter extends CustomPainter {
+  final List<double> amounts; final List<Color> colors;
+  const _DonutPainter(this.amounts,this.colors);
+  @override void paint(Canvas canvas,Size size){
+    final center=Offset(size.width/2,size.height/2);
+    final radius=math.min(size.width,size.height)*.37;
+    final paint=Paint()..style=PaintingStyle.stroke..strokeWidth=28;
+    canvas.drawCircle(center,radius,paint..color=Nexa.outline);
+    final total=amounts.fold<double>(0,(a,b)=>a+b);
+    if(total<=0)return;
+    var start=-math.pi/2;
+    for(var i=0;i<amounts.length;i++){
+      final sweep=math.pi*2*amounts[i]/total;
+      canvas.drawArc(Rect.fromCircle(center:center,radius:radius),start,sweep,false,paint..color=colors[i%colors.length]);
+      start+=sweep;
+    }
+  }
+  @override bool shouldRepaint(covariant _DonutPainter old)=>!_same(amounts,old.amounts);
+  bool _same(List<double> a,List<double> b){if(a.length!=b.length)return false;for(var i=0;i<a.length;i++){if(a[i]!=b[i])return false;}return true;}
 }
 
 class _TrendPainter extends CustomPainter {
   final List<double> sales,purchases;
   const _TrendPainter(this.sales,this.purchases);
   @override void paint(Canvas canvas,Size size){
-    final paint=Paint()..style=PaintingStyle.stroke..strokeWidth=2.5..strokeCap=StrokeCap.round;
-    final bounds=math.max(1.0,[...sales,...purchases].fold<double>(1,(a,b)=>math.max(a,b)));
-    const pad=16.0;final width=math.max(1.0,size.width-pad*2),height=math.max(1.0,size.height-pad*2);
-    for(var i=0;i<5;i++){
-      final y=pad+i*height/4;
-      canvas.drawLine(Offset(pad,y),Offset(size.width-pad,y),Paint()..color=const Color(0xffe8ecf4)..strokeWidth=1);
+    const left=12.0,right=9.0,top=10.0,bottom=12.0;
+    final w=math.max(1.0,size.width-left-right),h=math.max(1.0,size.height-top-bottom);
+    final maxValue=math.max(1.0,[...sales,...purchases].fold<double>(1,(v,x)=>math.max(v,x)));
+    for(var i=0;i<=4;i++){
+      final y=top+i*h/4;
+      canvas.drawLine(Offset(left,y),Offset(left+w,y),Paint()..color=Nexa.outline..strokeWidth=1);
     }
-    void draw(List<double> values,Color color){
-      if(values.isEmpty)return;
-      final path=Path();
+    for(var i=0;i<=6;i++){
+      final x=left+i*w/6;
+      canvas.drawLine(Offset(x,top),Offset(x,top+h),Paint()..color=Nexa.outline.withValues(alpha:.65)..strokeWidth=1);
+    }
+    Path path(List<double> values){
+      final p=Path();
       for(var i=0;i<values.length;i++){
-        final point=Offset(pad+i*width/math.max(1,values.length-1),pad+height*(1-values[i]/bounds));
-        if(i==0){path.moveTo(point.dx,point.dy);}else{path.lineTo(point.dx,point.dy);}
+        final pos=Offset(left+i*w/math.max(1,values.length-1),top+h*(1-values[i]/maxValue));
+        if(i==0){p.moveTo(pos.dx,pos.dy);}else{p.lineTo(pos.dx,pos.dy);}
       }
-      paint.color=color;canvas.drawPath(path,paint);
+      return p;
     }
-    draw(sales,const Color(0xff5267e7));draw(purchases,const Color(0xff2ca979));
+    final salesPath=path(sales);
+    if(sales.isNotEmpty){
+      final fill=Path.from(salesPath)..lineTo(left+w,top+h)..lineTo(left,top+h)..close();
+      canvas.drawPath(fill,Paint()..shader=LinearGradient(begin:Alignment.topCenter,end:Alignment.bottomCenter,colors:[Nexa.brightBlue.withValues(alpha:.34),Nexa.brightBlue.withValues(alpha:.01)]).createShader(Rect.fromLTWH(left,top,w,h)));
+    }
+    canvas.drawPath(salesPath,Paint()..color=Nexa.brightBlue..style=PaintingStyle.stroke..strokeWidth=2.8..strokeCap=StrokeCap.round);
+    canvas.drawPath(path(purchases),Paint()..color=Nexa.green..style=PaintingStyle.stroke..strokeWidth=1.8..strokeCap=StrokeCap.round);
   }
-  @override bool shouldRepaint(covariant _TrendPainter old)=>old.sales!=sales ||old.purchases!=purchases;
+  @override bool shouldRepaint(covariant _TrendPainter old)=>!_equals(sales,old.sales)||!_equals(purchases,old.purchases);
+  bool _equals(List<double> a,List<double> b){if(a.length!=b.length)return false;for(var i=0;i<a.length;i++){if(a[i]!=b[i])return false;}return true;}
 }

@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'commercial_core.dart';
 import 'license_widgets.dart';
 import 'store.dart';
+import 'nexa_theme.dart';
 
 class CommercialGate extends StatefulWidget {
   final Widget child;
@@ -68,23 +69,29 @@ class _CredentialScreenState extends State<_CredentialScreen>{
     }catch(e){if(mounted)setState(()=>error='$e');}
     finally{if(mounted)setState(()=>busy=false);}
   }
-  @override Widget build(BuildContext context)=>Scaffold(backgroundColor:const Color(0xFFF1F4FA),body:Center(child:SingleChildScrollView(child:ConstrainedBox(constraints:const BoxConstraints(maxWidth:460),child:Card(child:Padding(padding:const EdgeInsets.all(34),child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-    const Icon(Icons.storefront_rounded,size:52,color:Color(0xFF4B63D9)),const SizedBox(height:12),
-    Text(widget.register?'Set up your shop owner account':'Welcome back to ShopDesk',textAlign:TextAlign.center,style:const TextStyle(fontWeight:FontWeight.w800,fontSize:23)),
-    const SizedBox(height:8),Text(widget.register?'Your free 48-hour trial starts after registration.':'Sign in to manage your store.',textAlign:TextAlign.center,style:const TextStyle(color:Colors.blueGrey)),const SizedBox(height:27),
-    if(widget.register)...[
-      TextField(controller:shop,decoration:const InputDecoration(labelText:'Shop name',prefixIcon:Icon(Icons.storefront_outlined))),const SizedBox(height:13),
-      TextField(controller:phone,decoration:const InputDecoration(labelText:'Shop phone (optional)',prefixIcon:Icon(Icons.phone_outlined))),const SizedBox(height:13),
-      TextField(controller:address,decoration:const InputDecoration(labelText:'Shop address (optional)',prefixIcon:Icon(Icons.location_on_outlined))),const SizedBox(height:13),
-    ],
-    TextField(controller:username,decoration:const InputDecoration(labelText:'Username',prefixIcon:Icon(Icons.person_outline))),const SizedBox(height:13),
-    TextField(controller:password,obscureText:hidden,onSubmitted:(_)=>submit(),decoration:InputDecoration(labelText:'Password',prefixIcon:const Icon(Icons.lock_outline),suffixIcon:IconButton(onPressed:()=>setState(()=>hidden=!hidden),icon:Icon(hidden?Icons.visibility:Icons.visibility_off)))),
-    if(widget.register)...[const SizedBox(height:13),TextField(controller:confirmPass,obscureText:hidden,decoration:const InputDecoration(labelText:'Confirm password'))],
-    if(error!=null)...[const SizedBox(height:12),Text(error!,style:const TextStyle(color:Colors.red))],const SizedBox(height:24),
-    FilledButton.icon(onPressed:busy?null:submit,icon:Icon(widget.register?Icons.how_to_reg:Icons.login),label:Padding(padding:const EdgeInsets.all(9),child:Text(widget.register?'Create owner account':'Log in'))),
-    const SizedBox(height:12),const Text('Offline single-PC installation · data stays on this machine',textAlign:TextAlign.center,style:TextStyle(fontSize:11,color:Colors.blueGrey))
-  ])))))));
+  @override Widget build(BuildContext context)=>NexaAuthLayout(
+    heading:widget.register?'Create your shop account':'Welcome back',
+    subtitle:widget.register?'Set up your offline shop workspace and begin your 48-hour trial.':'Sign in to manage inventory, customers and reports.',
+    icon:widget.register?Icons.storefront_rounded:Icons.lock_open_rounded,
+    maxWidth:520,
+    child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+      if(widget.register)...[
+        TextField(controller:shop,decoration:const InputDecoration(labelText:'Shop name',prefixIcon:Icon(Icons.storefront_outlined))),const SizedBox(height:13),
+        TextField(controller:phone,decoration:const InputDecoration(labelText:'Phone (optional)',prefixIcon:Icon(Icons.phone_outlined))),const SizedBox(height:13),
+        TextField(controller:address,decoration:const InputDecoration(labelText:'Shop address (optional)',prefixIcon:Icon(Icons.location_on_outlined))),const SizedBox(height:13),
+      ],
+      TextField(controller:username,decoration:const InputDecoration(labelText:'Username',prefixIcon:Icon(Icons.person_outline))),const SizedBox(height:13),
+      TextField(controller:password,obscureText:hidden,onSubmitted:(_)=>submit(),decoration:InputDecoration(labelText:'Password',prefixIcon:const Icon(Icons.lock_outline),suffixIcon:IconButton(onPressed:()=>setState(()=>hidden=!hidden),icon:Icon(hidden?Icons.visibility_outlined:Icons.visibility_off_outlined)))),
+      if(widget.register)...[const SizedBox(height:13),TextField(controller:confirmPass,obscureText:hidden,decoration:const InputDecoration(labelText:'Confirm password',prefixIcon:Icon(Icons.lock_reset_outlined)))],
+      if(error!=null)...[const SizedBox(height:12),Text(error!,style:const TextStyle(color:Nexa.orange))],
+      const SizedBox(height:24),
+      FilledButton.icon(onPressed:busy?null:submit,icon:Icon(widget.register?Icons.how_to_reg:Icons.login),label:Padding(padding:const EdgeInsets.all(8),child:Text(widget.register?'Create owner account':'Sign in'))),
+      if(busy)...[const SizedBox(height:13),const LinearProgressIndicator(color:Nexa.brightBlue)],
+      const SizedBox(height:14),const Center(child:Text('Your data remains on this computer',style:TextStyle(color:Nexa.muted,fontSize:11))),
+    ]),
+  );
 }
+
 
 class ActivationScreen extends StatefulWidget {
   final VoidCallback onActivated,onSignOut;
@@ -100,19 +107,31 @@ class _ActivationScreenState extends State<ActivationScreen>{
     catch(e){if(mounted)setState(()=>error='$e');}
     finally{if(mounted)setState(()=>busy=false);}
   }
-  @override Widget build(BuildContext context){final c=CommercialCore.instance;
-    return Scaffold(backgroundColor:const Color(0xFFF1F4FA),body:Center(child:ConstrainedBox(constraints:const BoxConstraints(maxWidth:570),child:Card(child:Padding(padding:const EdgeInsets.all(30),child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-      const Icon(Icons.key_rounded,size:55,color:Color(0xFF4B63D9)),const SizedBox(height:16),const Text('Activate ShopDesk',textAlign:TextAlign.center,style:TextStyle(fontSize:24,fontWeight:FontWeight.bold)),
-      const SizedBox(height:7),Text(c.license.label,textAlign:TextAlign.center,style:const TextStyle(color:Colors.deepOrange,fontWeight:FontWeight.w600)),const SizedBox(height:18),
-      const LicenseCountdown(),const SizedBox(height:12),const Text('Your device code (send to software owner):'),const SizedBox(height:7),SelectableText(c.deviceCode,style:const TextStyle(fontSize:19,fontWeight:FontWeight.bold,letterSpacing:1)),
-      Align(alignment:Alignment.centerRight,child:TextButton.icon(onPressed:()=>Clipboard.setData(ClipboardData(text:c.deviceCode)),icon:const Icon(Icons.copy),label:const Text('Copy device code'))),const SizedBox(height:18),
-      TextField(controller:code,maxLines:4,decoration:const InputDecoration(labelText:'Signed activation key',hintText:'Paste the activation key from software owner')),
-      if(error!=null)Padding(padding:const EdgeInsets.only(top:10),child:Text(error!,style:const TextStyle(color:Colors.red))),const SizedBox(height:18),
-      FilledButton.icon(onPressed:busy?null:submit,icon:const Icon(Icons.verified_user),label:const Padding(padding:EdgeInsets.all(9),child:Text('Activate license'))),
-      const SizedBox(height:13),TextButton(onPressed:widget.onSignOut,child:const Text('Sign out'))
-    ]))))));
+  @override Widget build(BuildContext context){
+    final c=CommercialCore.instance;
+    return NexaAuthLayout(
+      heading:'Activate your license',
+      subtitle:'Your trial or current license has ended. Enter a signed key from the software owner to unlock ShopDesk.',
+      icon:Icons.key_rounded,
+      maxWidth:605,
+      child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+        Center(child:Text(c.license.label,style:const TextStyle(color:Nexa.orange,fontWeight:FontWeight.w700,fontSize:14))),
+        const SizedBox(height:14),const Center(child:LicenseCountdown()),const SizedBox(height:18),
+        const Text('MACHINE ID',style:TextStyle(color:Nexa.muted,fontSize:10,letterSpacing:1.6,fontWeight:FontWeight.w700)),
+        const SizedBox(height:9),Container(padding:const EdgeInsets.all(13),decoration:BoxDecoration(color:Nexa.background,border:Border.all(color:Nexa.outline),borderRadius:BorderRadius.circular(8)),child:SelectableText(c.deviceCode,style:const TextStyle(color:Nexa.white,fontWeight:FontWeight.w800,fontSize:16,letterSpacing:1))),
+        Align(alignment:Alignment.centerRight,child:TextButton.icon(onPressed:()=>Clipboard.setData(ClipboardData(text:c.deviceCode)),icon:const Icon(Icons.copy,color:Nexa.brightBlue,size:16),label:const Text('Copy Machine ID',style:TextStyle(color:Nexa.brightBlue)))),
+        const SizedBox(height:12),
+        TextField(controller:code,maxLines:4,minLines:3,decoration:const InputDecoration(labelText:'Signed activation key',hintText:'Paste key generated for this machine')),
+        if(error!=null)Padding(padding:const EdgeInsets.only(top:12),child:Text(error!,style:const TextStyle(color:Nexa.orange))),
+        const SizedBox(height:18),
+        FilledButton.icon(onPressed:busy?null:submit,icon:const Icon(Icons.verified_user),label:const Padding(padding:EdgeInsets.all(8),child:Text('Activate license'))),
+        if(busy)...[const SizedBox(height:12),const LinearProgressIndicator(color:Nexa.brightBlue)],
+        const SizedBox(height:12),TextButton(onPressed:widget.onSignOut,child:const Text('Sign out',style:TextStyle(color:Nexa.muted))),
+      ]),
+    );
   }
 }
+
 
 class UserManagementScreen extends StatefulWidget {const UserManagementScreen({super.key});@override State<UserManagementScreen> createState()=>_UserManagementScreenState();}
 class _UserManagementScreenState extends State<UserManagementScreen>{
