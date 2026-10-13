@@ -1,4 +1,4 @@
-name: Build ShopDesk Windows EXE (v0.5.1)
+name: Build ShopDesk Windows EXE (v0.6.0)
 
 on:
   workflow_dispatch:
@@ -42,8 +42,11 @@ jobs:
           if (-not (Test-Path 'lib/commercial_core.dart')) { throw 'Commercial upgrade source missing' }
           if (-not (Test-Path 'lib/license_public.dart')) { throw 'License public key missing' }
           if (Test-Path 'shopdesk_license_private.pem') { throw 'PRIVATE SIGNING KEY MUST NEVER BE COMMITTED TO GITHUB' }
-          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.5.1'))) { throw 'ShopDesk v0.5.1 source version missing' }
-          Write-Host 'ShopDesk v0.5.1 source layout confirmed'  
+          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.6.0'))) { throw 'ShopDesk v0.6.0 source version missing' }
+          if (-not (Test-Path 'lib/boot_setup.dart')) { throw 'First-launch setup module missing' }
+          if (-not (Test-Path 'lib/settings_hub.dart')) { throw 'Settings hub module missing' }
+          if (-not (Test-Path 'lib/license_widgets.dart')) { throw 'Live license status component missing' }
+          Write-Host 'ShopDesk v0.6.0 source layout confirmed'  
 
       - name: Generate native Windows files
         run: flutter create --platforms=windows --project-name shopdesk_flutter --no-pub .
@@ -67,7 +70,7 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: ShopDesk database and commercial regression tests
-        run: flutter test test/store_test.dart test/commercial_test.dart
+        run: flutter test test/store_test.dart test/commercial_test.dart test/boot_setup_test.dart
 
       - name: Build Windows release
         run: flutter build windows --release

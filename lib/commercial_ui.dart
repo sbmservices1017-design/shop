@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'commercial_core.dart';
+import 'license_widgets.dart';
 import 'store.dart';
 
 class CommercialGate extends StatefulWidget {
@@ -15,8 +16,16 @@ class CommercialGate extends StatefulWidget {
 }
 class _CommercialGateState extends State<CommercialGate> {
   final c=CommercialCore.instance;
-  bool busy=true,hasOwner=false;String? error;Timer? clockTimer;
-  @override void initState(){super.initState();c.addListener(changed);load();clockTimer=Timer.periodic(const Duration(minutes:1),(_)async{await c.refreshLicense();if(mounted)setState((){});});}
+  bool busy=true,hasOwner=false;String? error;Timer? clockTimer;int ticks=0;bool checking=false;
+  @override void initState(){super.initState();c.addListener(changed);load();clockTimer=Timer.periodic(const Duration(seconds:1),(_)async{
+    ticks++;
+    final expiration=c.license.expires;
+    if(!checking && (ticks%10==0 || (c.license.allowed && expiration!=null && !DateTime.now().toUtc().isBefore(expiration)))){
+      checking=true;
+      try{await c.refreshLicense();}finally{checking=false;}
+    }
+    if(mounted)setState((){});
+  });}
   @override void dispose(){clockTimer?.cancel();c.removeListener(changed);super.dispose();}
   Future<void> load()async{
     try{
@@ -29,8 +38,9 @@ class _CommercialGateState extends State<CommercialGate> {
     if(busy)return const Scaffold(body:Center(child:CircularProgressIndicator()));
     if(error!=null)return Scaffold(body:Center(child:SelectableText(error!)));
     if(!hasOwner)return _CredentialScreen(register:true,onSuccess:()async{hasOwner=true;await load();changed();});
-    if(c.current==null)return _CredentialScreen(register:false,onSuccess:changed);
+    // Expired trial/license blocks the application before normal login.
     if(!c.license.allowed)return ActivationScreen(onActivated:changed,onSignOut:(){c.signOut();changed();});
+    if(c.current==null)return _CredentialScreen(register:false,onSuccess:changed);
     return widget.child;
   }
 }
@@ -41,16 +51,18 @@ class _CredentialScreen extends StatefulWidget {
   @override State<_CredentialScreen> createState()=>_CredentialScreenState();
 }
 class _CredentialScreenState extends State<_CredentialScreen>{
-  final username=TextEditingController(),password=TextEditingController(),confirmPass=TextEditingController();
+  final username=TextEditingController(),password=TextEditingController(),confirmPass=TextEditingController(),shop=TextEditingController(),phone=TextEditingController(),address=TextEditingController();
   bool busy=false,hidden=true;String? error;
-  @override void dispose(){username.dispose();password.dispose();confirmPass.dispose();super.dispose();}
+  @override void dispose(){username.dispose();password.dispose();confirmPass.dispose();shop.dispose();phone.dispose();address.dispose();super.dispose();}
   Future<void> submit()async{
     if(busy)return;
     setState((){busy=true;error=null;});
     try{
       if(widget.register){
         if(password.text!=confirmPass.text)throw const FormatException('Passwords do not match');
+        if(shop.text.trim().isEmpty)throw const FormatException('Shop name is required');
         await CommercialCore.instance.registerOwner(username.text,password.text);
+        await CommercialCore.instance.saveShopProfile(name:shop.text,phone:phone.text,address:address.text);
       }else{await CommercialCore.instance.signIn(username.text,password.text);}
       widget.onSuccess();
     }catch(e){if(mounted)setState(()=>error='$e');}
@@ -60,6 +72,11 @@ class _CredentialScreenState extends State<_CredentialScreen>{
     const Icon(Icons.storefront_rounded,size:52,color:Color(0xFF4B63D9)),const SizedBox(height:12),
     Text(widget.register?'Set up your shop owner account':'Welcome back to ShopDesk',textAlign:TextAlign.center,style:const TextStyle(fontWeight:FontWeight.w800,fontSize:23)),
     const SizedBox(height:8),Text(widget.register?'Your free 48-hour trial starts after registration.':'Sign in to manage your store.',textAlign:TextAlign.center,style:const TextStyle(color:Colors.blueGrey)),const SizedBox(height:27),
+    if(widget.register)...[
+      TextField(controller:shop,decoration:const InputDecoration(labelText:'Shop name',prefixIcon:Icon(Icons.storefront_outlined))),const SizedBox(height:13),
+      TextField(controller:phone,decoration:const InputDecoration(labelText:'Shop phone (optional)',prefixIcon:Icon(Icons.phone_outlined))),const SizedBox(height:13),
+      TextField(controller:address,decoration:const InputDecoration(labelText:'Shop address (optional)',prefixIcon:Icon(Icons.location_on_outlined))),const SizedBox(height:13),
+    ],
     TextField(controller:username,decoration:const InputDecoration(labelText:'Username',prefixIcon:Icon(Icons.person_outline))),const SizedBox(height:13),
     TextField(controller:password,obscureText:hidden,onSubmitted:(_)=>submit(),decoration:InputDecoration(labelText:'Password',prefixIcon:const Icon(Icons.lock_outline),suffixIcon:IconButton(onPressed:()=>setState(()=>hidden=!hidden),icon:Icon(hidden?Icons.visibility:Icons.visibility_off)))),
     if(widget.register)...[const SizedBox(height:13),TextField(controller:confirmPass,obscureText:hidden,decoration:const InputDecoration(labelText:'Confirm password'))],
@@ -87,7 +104,7 @@ class _ActivationScreenState extends State<ActivationScreen>{
     return Scaffold(backgroundColor:const Color(0xFFF1F4FA),body:Center(child:ConstrainedBox(constraints:const BoxConstraints(maxWidth:570),child:Card(child:Padding(padding:const EdgeInsets.all(30),child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.stretch,children:[
       const Icon(Icons.key_rounded,size:55,color:Color(0xFF4B63D9)),const SizedBox(height:16),const Text('Activate ShopDesk',textAlign:TextAlign.center,style:TextStyle(fontSize:24,fontWeight:FontWeight.bold)),
       const SizedBox(height:7),Text(c.license.label,textAlign:TextAlign.center,style:const TextStyle(color:Colors.deepOrange,fontWeight:FontWeight.w600)),const SizedBox(height:18),
-      const Text('Your device code (send to software owner):'),const SizedBox(height:7),SelectableText(c.deviceCode,style:const TextStyle(fontSize:19,fontWeight:FontWeight.bold,letterSpacing:1)),
+      const LicenseCountdown(),const SizedBox(height:12),const Text('Your device code (send to software owner):'),const SizedBox(height:7),SelectableText(c.deviceCode,style:const TextStyle(fontSize:19,fontWeight:FontWeight.bold,letterSpacing:1)),
       Align(alignment:Alignment.centerRight,child:TextButton.icon(onPressed:()=>Clipboard.setData(ClipboardData(text:c.deviceCode)),icon:const Icon(Icons.copy),label:const Text('Copy device code'))),const SizedBox(height:18),
       TextField(controller:code,maxLines:4,decoration:const InputDecoration(labelText:'Signed activation key',hintText:'Paste the activation key from software owner')),
       if(error!=null)Padding(padding:const EdgeInsets.only(top:10),child:Text(error!,style:const TextStyle(color:Colors.red))),const SizedBox(height:18),

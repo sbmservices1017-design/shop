@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart' as digest;
 import 'package:cryptography/cryptography.dart';
@@ -45,6 +47,42 @@ class CommercialCore extends ChangeNotifier {
   static const _operations=['view','create','edit','delete'];
   final _hasher=Pbkdf2(macAlgorithm:Hmac.sha256(),iterations:120000,bits:256);
 
+  Future<File> _trialMarker() async {
+    // Test/override databases use an isolated anchor beside their DB.
+    if(p.basename(store.dbPath)!='shopdesk.sqlite') {
+      return File(p.join(p.dirname(store.dbPath),'shopdesk_trial_first_registration.txt'));
+    }
+    final folder=await getApplicationSupportDirectory();
+    return File(p.join(folder.path,'shopdesk_trial_first_registration.txt'));
+  }
+  Future<String> _trialStartAnchor() async {
+    final marker=await _trialMarker();
+    if(await marker.exists()) {
+      final saved=(await marker.readAsString()).trim();
+      if(DateTime.tryParse(saved)!=null)return saved;
+    }
+    final value=DateTime.now().toUtc().toIso8601String();
+    await marker.writeAsString(value,flush:true);
+    return value;
+  }
+  Future<void> _reconcileTrialAnchor() async {
+    final raw=await readSetting('trial_start_utc');
+    if(raw==null)return;
+    final existing=DateTime.tryParse(raw)?.toUtc();
+    if(existing==null)return;
+    final marker=await _trialMarker();
+    if(!await marker.exists()){
+      await marker.writeAsString(existing.toIso8601String(),flush:true);
+      return;
+    }
+    final anchored=DateTime.tryParse((await marker.readAsString()).trim())?.toUtc();
+    if(anchored==null || existing.isBefore(anchored)) {
+      await marker.writeAsString(existing.toIso8601String(),flush:true);
+    }else if(anchored.isBefore(existing)) {
+      await saveSetting('trial_start_utc',anchored.toIso8601String());
+    }
+  }
+
   Future<void> init() async {
     final db=store.db;
     await db.execute('''CREATE TABLE IF NOT EXISTS app_users(
@@ -64,6 +102,7 @@ class CommercialCore extends ChangeNotifier {
       id INTEGER PRIMARY KEY, at TEXT NOT NULL, user_id INTEGER, event TEXT NOT NULL,
       FOREIGN KEY(user_id) REFERENCES app_users(id))''');
     deviceCode=await _deviceCode();
+    await _reconcileTrialAnchor();
     await refreshLicense();
   }
 
@@ -110,12 +149,13 @@ class CommercialCore extends ChangeNotifier {
   Future<void> registerOwner(String name,String password) async {
     if(await hasOwner)throw StateError('Owner already exists');
     _validPassword(password);
+    final trialStart=await _trialStartAnchor();
     final salt=_randomSalt();final hash=await _hashPassword(password,salt);
     await store.db.transaction((t)async {
       final existing=await t.rawQuery('SELECT count(*) AS n FROM app_users');
       if((existing.first['n'] as int)>0)throw StateError('Owner already exists');
       final id=await t.rawInsert('INSERT INTO app_users(username,salt,pass_hash,is_admin,created_at) VALUES(?,?,?,?,?)',[_validName(name),base64Encode(salt),hash,1,DateTime.now().toUtc().toIso8601String()]);
-      await t.rawInsert('INSERT OR IGNORE INTO app_settings(key,value) VALUES(?,?)',['trial_start_utc',DateTime.now().toUtc().toIso8601String()]);
+      await t.rawInsert('INSERT OR IGNORE INTO app_settings(key,value) VALUES(?,?)',['trial_start_utc',trialStart]);
       await t.rawInsert('INSERT INTO login_events(at,user_id,event) VALUES(?,?,?)',[DateTime.now().toUtc().toIso8601String(),id,'OWNER_REGISTERED']);
     });
     await signIn(name,password);

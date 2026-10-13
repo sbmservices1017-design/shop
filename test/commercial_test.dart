@@ -37,6 +37,14 @@ void main(){
     expect(core.current!.allowed('Purchases','view'),false);
     expect(core.current!.allowed('Sales / Billing','delete'),false);
   });
+  test('48-hour trial actually expires',()async{
+    final original=await core.readSetting('trial_start_utc');
+    await core.saveSetting('trial_start_utc',DateTime.now().toUtc().subtract(const Duration(hours:49)).toIso8601String());
+    await core.refreshLicense();
+    expect(core.license.allowed,false);
+    expect(core.license.label,'Trial expired');
+    if(original!=null){await core.saveSetting('trial_start_utc',original);await core.refreshLicense();}
+  });
   test('invalid license is rejected',()async{
     await expectLater(core.activate('invalid-key'),throwsFormatException);
   });

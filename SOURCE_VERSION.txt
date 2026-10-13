@@ -1,3 +1,1 @@
-SHOPDESK FLUTTER DEVELOPMENT SOURCE v0.5.1
-Changes from v0.5.0: advanced_dashboard.dart widget syntax rewritten; missing store.dart import added in commercial_ui.dart.
-GitHub Windows build, Flutter analyzer, and Flutter tests must still run; no compiled EXE is included.
+ShopDesk Pro v0.6.0 — integrated first-run/setup, 48-hour trial, advanced dashboard, settings hub, restore

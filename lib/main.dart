@@ -7,11 +7,13 @@ import 'commercial_core.dart';
 import 'commercial_ui.dart';
 import 'modern_pos.dart';
 import 'advanced_dashboard.dart';
+import 'boot_setup.dart';
+import 'settings_hub.dart';
+import 'license_widgets.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  try {await Store.instance.init();await ensureExtendedSchema(Store.instance);await CommercialCore.instance.init();runApp(const ShopDesk());}
-  catch(e){runApp(MaterialApp(home:Scaffold(body:Center(child:SelectableText('Could not open ShopDesk database: $e')))));}
+  runApp(const ShopDesk());
 }
 const ink=Color(0xFF19243A);
 const blue=Color(0xFF4B63D9);
@@ -30,7 +32,7 @@ class ShopDesk extends StatelessWidget {
       inputDecorationTheme:InputDecorationTheme(filled:true,fillColor:Colors.white,contentPadding:const EdgeInsets.symmetric(horizontal:14,vertical:14),
         border:OutlineInputBorder(borderRadius:BorderRadius.circular(10),borderSide:const BorderSide(color:Color(0xFFE2E7F0))),
         enabledBorder:OutlineInputBorder(borderRadius:BorderRadius.circular(10),borderSide:const BorderSide(color:Color(0xFFE2E7F0))))),
-    home:const CommercialGate(child:Shell()));
+    home:ShopDeskBootstrap(application:()=>const CommercialGate(child:Shell())));
 }
 
 class FieldSpec {
@@ -81,8 +83,7 @@ class _ShellState extends State<Shell> {
     (label:'Customers',icon:Icons.people_outline),(label:'Suppliers',icon:Icons.local_shipping_outlined),
     (label:'Expenses',icon:Icons.payments_outlined),(label:'Employees & Payroll',icon:Icons.badge_outlined),
     (label:'Accounts & Journal',icon:Icons.account_balance_outlined),(label:'Reports / Export',icon:Icons.analytics_outlined),
-    (label:'Settings & Backup',icon:Icons.settings_outlined),
-    (label:'Shop Profile',icon:Icons.store_outlined),(label:'Users & Permissions',icon:Icons.manage_accounts_outlined)];
+    (label:'Settings & Backup',icon:Icons.settings_outlined)];
   void refresh(){if(mounted)setState(()=>revision++);}
   Future<void> correctPostedInvoice(String kind,int id)async{
     final ok=await showDialog<bool>(context:context,builder:(ctx)=>InvoiceDialog(kind:kind,existingId:id));
@@ -93,7 +94,7 @@ class _ShellState extends State<Shell> {
     3=>StockScreen(onChange:refresh),4=>ModernPosScreen(kind:'sale',onChange:refresh,onCorrectInvoice:(id)=>correctPostedInvoice('sale',id)),5=>ModernPosScreen(kind:'purchase',onChange:refresh,onCorrectInvoice:(id)=>correctPostedInvoice('purchase',id)),
     6=>ReturnScreen(onChange:refresh),7=>PartiesScreen(kind:'customer',onChange:refresh),8=>PartiesScreen(kind:'supplier',onChange:refresh),
     9=>ExpenseScreen(onChange:refresh),10=>EmployeeScreen(onChange:refresh),11=>AccountsScreen(onChange:refresh),
-    12=>ReportsScreen(revision:revision),13=>SettingsScreen(onChange:refresh),14=>const ShopProfileScreen(),_=>const UserManagementScreen()};}
+    12=>ReportsScreen(revision:revision),_=>const SettingsHub()};}
   @override Widget build(BuildContext context){
     final core=CommercialCore.instance;
     final available=[for(var i=0;i<menu.length;i++)if(core.current?.allowed(menu[i].label,'view')==true||menu[i].label=='Shop Profile'&&core.current?.isAdmin==true)i];
@@ -111,7 +112,7 @@ class _ShellState extends State<Shell> {
       Container(height:77,color:Colors.white,padding:const EdgeInsets.symmetric(horizontal:30),child:Row(children:[
         Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisAlignment:MainAxisAlignment.center,children:[Text(menu[page].label,style:const TextStyle(fontSize:22,color:ink,fontWeight:FontWeight.w800)),Text('Manage your shop with confidence',style:TextStyle(fontSize:11,color:Colors.blueGrey.shade400))])),
         OutlinedButton.icon(onPressed:refresh,icon:const Icon(Icons.refresh,size:18),label:const Text('Refresh')),
-        const SizedBox(width:12),Chip(avatar:const Icon(Icons.key,size:15),label:Text(core.license.label,style:const TextStyle(fontSize:11))),
+        const SizedBox(width:12),const LicenseCountdown(compact:true),
         const SizedBox(width:12),Text(core.current?.username??'',style:const TextStyle(fontWeight:FontWeight.bold,fontSize:12)),
         IconButton(tooltip:'Sign out',onPressed:core.signOut,icon:const Icon(Icons.logout))])),
       Expanded(child:KeyedSubtree(key:ValueKey('$page-$revision'),child:screen()))
