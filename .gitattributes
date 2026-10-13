@@ -1,2 +1,5 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Windows GitHub runners must preserve LF for Dart & build files.
+*.dart text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf

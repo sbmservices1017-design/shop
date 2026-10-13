@@ -1,0 +1,88 @@
+name: Build ShopDesk Windows EXE (v0.4.3)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build Windows bundle
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Check Flutter version
+        run: flutter --version
+
+      - name: Verify corrected ShopDesk sources were uploaded
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'lib/store.dart')) { throw 'lib/store.dart not at repository root. Upload ShopDesk folder contents, not folder itself.' }
+          $source = Get-Content 'lib/store.dart' -Raw
+          if (-not $source.Contains('SHOPDESK_SOURCE_0_4_2_ANALYZER_FIX')) {
+            throw 'OLD SOURCE detected: replace lib/store.dart with v0.4.2. Remove older duplicate files.'
+          }
+          if (-not $source.Contains("final money=pennies(paid);")) { throw 'Invoice totals fix missing.' }
+          # Match Dart tokens with a regex, not exact line endings. Windows
+          # checkout can convert LF to CRLF, breaking String.Contains with `n.
+          if ($source -notmatch 'return\s+updated;\s*\}\);\s*Future<void>\s+recordPayment\s*\(') {
+            throw 'reviseDocument closing fix missing in lib/store.dart.'
+          }
+          $ui = Get-Content 'lib/main.dart' -Raw
+          if ($ui.Contains("r.kind='expense'") -and $ui.Contains("future:s.read('SELECT e.*")) { throw 'Expense SQL quote fix is missing in lib/main.dart' }
+          Write-Host 'Corrected source confirmed: v0.4.3 (line-ending-safe)' 
+
+      - name: Generate native Windows files
+        run: flutter create --platforms=windows --project-name shopdesk_flutter --no-pub .
+
+      # Flutter may add its TEMPLATE widget_test.dart automatically.
+      # That template calls MyApp(), whereas this application uses ShopDesk().
+      # We keep our real database tests in test/store_test.dart.
+      - name: Remove invalid Flutter template test
+        shell: pwsh
+        run: |
+          if (Test-Path 'test/widget_test.dart') {
+            Remove-Item 'test/widget_test.dart' -Force
+            Write-Host 'Removed auto-generated widget_test.dart referring to MyApp.'
+          }
+
+      - name: Resolve Dart dependencies
+        run: flutter pub get
+
+      - name: Static analyzer (fail on errors)
+        # Warnings and deprecations are listed but do not block the release.
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: ShopDesk database regression tests
+        run: flutter test test/store_test.dart
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Verify and bundle entire Windows release directory
+        shell: pwsh
+        run: |
+          $release = 'build/windows/x64/runner/Release'
+          if (-not (Test-Path $release)) { $release = 'build/windows/runner/Release' }
+          if (-not (Test-Path $release)) { throw 'Windows release folder not found' }
+          $exe = Get-ChildItem -Path $release -Filter '*.exe' -File | Select-Object -First 1
+          if (-not $exe) { throw 'Release folder has no .exe' }
+          Write-Host "Built executable: $($exe.Name)"
+          Write-Host 'IMPORTANT: Run .exe from its release folder with DLL/data files.'
+          Compress-Archive -Path "$release/*" -DestinationPath 'ShopDesk_Windows_Release.zip' -Force
+
+      - name: Upload ShopDesk Windows bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShopDesk-Windows-Release
+          path: ShopDesk_Windows_Release.zip
+          if-no-files-found: error

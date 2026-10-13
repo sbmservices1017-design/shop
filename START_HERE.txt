@@ -1,0 +1,22 @@
+SHOPDESK — SINGLE WINDOWS DESKTOP APPLICATION SOURCE v0.4.0
+
+IMPORTANT: This is source code + a Windows build script, NOT a compiled EXE
+or a production-approved ERP. All requested requirements are documented in
+'docs/FULL_REQUIREMENTS.md'. Some advanced requirements need further development.
+
+1) On Windows 10/11 install Flutter SDK (stable) and Visual Studio 2022
+   with Desktop Development with C++ workload.
+2) Unzip project to C:\ShopDesk_Source
+3) Open a terminal at project root.
+4) Run:
+     flutter doctor -v
+     flutter create --platforms=windows .
+     flutter pub get
+     flutter analyze --no-fatal-infos
+     flutter test
+     flutter run -d windows
+5) Run build_windows.bat for release output.
+6) Keep all files in the Windows Release folder together.
+
+DO NOT use for real shop financial records until the remaining security,
+inventory costing, backup/restore and Windows acceptance tests are completed.

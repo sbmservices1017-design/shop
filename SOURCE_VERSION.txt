@@ -1,0 +1,5 @@
+ShopDesk Flutter source: v0.4.3
+Build fix: Windows GitHub Actions guard uses whitespace-independent regex and .gitattributes
+Dart source: same as v0.4.2 (existing corrections preserved)
+Local verification: regex on LF/CRLF, YAML, zip, SQLite schema
+Flutter analyzer/Windows compiler: NOT AVAILABLE here; verify via GitHub Actions
