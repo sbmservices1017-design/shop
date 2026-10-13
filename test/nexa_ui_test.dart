@@ -17,7 +17,7 @@ void main() {
     )));
     expect(find.text('Welcome back'),findsOneWidget);
     expect(find.text('Login form'),findsOneWidget);
-    expect(find.text('SHOPDESK PRO'),findsOneWidget);
+    expect(find.text('ShopDesk Pro'),findsOneWidget);
     expect(find.byType(NexaPanel),findsOneWidget);
   });
 }

@@ -1,0 +1,20 @@
+SHOPDESK PRO v0.8.2 — UI TEST EXPECTATION FIX
+
+GitHub failed at ShopDesk database and UI regression tests, after reporting 26 passed / 1 failed.
+
+The old test test/nexa_ui_test.dart expected the exact uppercase title "SHOPDESK PRO".
+The current SBM Services branded NexaAuthLayout visibly renders "ShopDesk Pro" instead.
+
+Fix: changed exactly one assertion in test/nexa_ui_test.dart:
+- expect(find.text('SHOPDESK PRO'),findsOneWidget);
++ expect(find.text('ShopDesk Pro'),findsOneWidget);
+
+No Flutter application code, payroll logic, database schema, inventory, or login visual components have been changed.
+
+To build:
+1) Extract ZIP. Upload all contents inside the ShopDesk folder to the repository root.
+2) Commit including test/nexa_ui_test.dart.
+3) Run GitHub Actions workflow Build ShopDesk Windows EXE (v0.8.2).
+
+Verification done: ZIP CRC and source-diff checks. Flutter test/build NOT executable in this environment.
+If a new test fails, expand its failure output and share the expected/actual lines.
