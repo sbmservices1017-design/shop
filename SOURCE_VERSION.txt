@@ -1,1 +1,1 @@
-ShopDesk Pro v0.8.0 · LIGHT BLUE UI + DATE FILTER + INVOICE LISTING + SAME-ID CORRECTION
+ShopDesk Pro v0.8.2 — SBM Services commercial branding and split-screen auth

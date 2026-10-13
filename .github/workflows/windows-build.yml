@@ -1,4 +1,4 @@
-name: Build ShopDesk Windows EXE (v0.8.0)
+name: Build ShopDesk Windows EXE (v0.8.2)
 
 on:
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
           if (-not (Test-Path 'lib/commercial_core.dart')) { throw 'Commercial upgrade source missing' }
           if (-not (Test-Path 'lib/license_public.dart')) { throw 'License public key missing' }
           if (Test-Path 'shopdesk_license_private.pem') { throw 'PRIVATE SIGNING KEY MUST NEVER BE COMMITTED TO GITHUB' }
-          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.8.0'))) { throw 'ShopDesk v0.8.0 source version missing' }
+          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.8.2'))) { throw 'ShopDesk v0.8.2 source version missing' }
           if (-not (Test-Path 'lib/boot_setup.dart')) { throw 'First-launch setup module missing' }
           if (-not (Test-Path 'lib/settings_hub.dart')) { throw 'Settings hub module missing' }
           $settings = Get-Content 'lib/settings_hub.dart' -Raw
@@ -46,7 +46,13 @@ jobs:
           if (-not (Test-Path 'lib/license_widgets.dart')) { throw 'Live license status component missing' }
           if (-not (Test-Path 'lib/nexa_theme.dart')) { throw 'NexaDash shared theme missing' }
           if (-not ((Get-Content 'lib/advanced_dashboard.dart' -Raw).Contains('chooseDates'))) { throw 'Date range dashboard filter missing' }
-          Write-Host 'ShopDesk v0.8.0 source layout confirmed'  
+          if (-not (Test-Path 'lib/payroll_dialog.dart')) { throw 'Payroll fix dialog missing' }
+          if (-not (Test-Path 'lib/payroll_math.dart')) { throw 'Payroll calculation fix missing' }
+          if (-not (Test-Path 'lib/brand_identity.dart')) { throw 'SBM branding component missing' }
+          if (-not (Test-Path 'assets/branding/sbm_logo.png')) { throw 'SBM transparent logo missing' }
+          if (-not ((Get-Content 'lib/main.dart' -Raw).Contains('const SbmFooter()'))) { throw 'SBM global footer missing from Shell' }
+          if (-not ((Get-Content 'lib/nexa_theme.dart' -Raw).Contains('Expanded(flex: 43, child: _brandPanel())'))) { throw 'SBM split-screen login layout missing' }
+          Write-Host 'ShopDesk v0.8.2 SBM-branded source layout confirmed'  
 
       - name: Generate native Windows files
         run: flutter create --platforms=windows --project-name shopdesk_flutter --no-pub .
@@ -70,7 +76,7 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: ShopDesk database and UI regression tests
-        run: flutter test test/store_test.dart test/commercial_test.dart test/boot_setup_test.dart test/nexa_ui_test.dart
+        run: flutter test test/store_test.dart test/commercial_test.dart test/boot_setup_test.dart test/nexa_ui_test.dart test/payroll_math_test.dart test/payroll_ui_test.dart test/sbm_branding_test.dart
 
       - name: Build Windows release
         run: flutter build windows --release

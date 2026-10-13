@@ -1,0 +1,31 @@
+SHOPDESK PRO v0.8.1 — EMPLOYEE PAYROLL / ADVANCE FIX
+
+This ZIP is the whole Flutter source project (not an EXE).
+
+WHY THE ERROR OCCURRED:
+Monthly gross salary: Rs. 40,000.00
+Advance already given: Rs. 5,000.00
+Advance recovered from salary: Rs. 5,000.00
+Net cash salary to pay: Rs. 35,000.00
+The previous form let staff type Rs. 40,000 into Pay Now even after recovery; the backend correctly blocked the overpayment, but the UI gave no auto-calculation.
+
+WHAT IS FIXED:
+- Dedicated payroll form previews gross, current advance, max recovery, net salary, salary due.
+- Pay Now automatically changes to net after recovery; partial payments supported.
+- Employees table now includes Salary Due; separate Pay Salary Due auto-fills outstanding.
+- Clear duplicate-month, wrong recovery, and overpayment errors.
+- Ledger and journal code remains atomic with existing transactions.
+- Automated Dart regression and payroll UI tests added (must run via GitHub Actions).
+
+BUILD:
+1. Back up existing source repository and your local SQLite shop database.
+2. Extract ZIP and copy *CONTENTS OF THE ShopDesk folder* to GitHub repository root on a test branch.
+3. Commit files including .github/workflows/windows-build.yml.
+4. Run GitHub Actions: Build ShopDesk Windows EXE (v0.8.1).
+5. Wait until analyze, test and build all pass.
+6. In a restored COPY of your database, test employee Rs.40,000 salary + Rs.5,000 advance + Rs.5,000 recovery.
+7. Never overwrite or modify a live, open SQLite database using a test build.
+
+STATUS: SQLite ledger query exercise and source/package structure checked locally.
+Flutter compiler, widget tests and Windows build were NOT run in this environment.
+Do not treat this source as a verified production installer until the GitHub job passes and the test cases work on your copy of shop data.

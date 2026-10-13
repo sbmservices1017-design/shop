@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'brand_identity.dart';
 
 /// Reusable NexaDash-inspired visual tokens. No business logic lives here.
 abstract final class Nexa {
@@ -47,12 +48,16 @@ class NexaPanel extends StatelessWidget {
 }
 
 /// Shared for first launch, owner registration, login and license activation.
+/// All onboarding screens share the same SBM Services split-screen shell.
+/// On a normal Windows desktop the logo is always on the left and the form is on
+/// the right. Smaller windows use a vertically scrollable layout without overflow.
 class NexaAuthLayout extends StatelessWidget {
   final String heading;
   final String subtitle;
   final IconData icon;
   final Widget child;
   final double maxWidth;
+
   const NexaAuthLayout({
     super.key,
     required this.heading,
@@ -62,95 +67,163 @@ class NexaAuthLayout extends StatelessWidget {
     this.maxWidth = 530,
   });
 
-  @override Widget build(BuildContext context) {
+  Widget _brandPanel({bool compact = false}) => Container(
+    width: double.infinity,
+    padding: EdgeInsets.symmetric(horizontal: compact ? 22 : 46, vertical: compact ? 20 : 36),
+    decoration: const BoxDecoration(
+      gradient: LinearGradient(
+        colors: [Color(0xFF0C1E36), Color(0xFF12395F), Color(0xFF1C65AC)],
+        begin: Alignment.topLeft, end: Alignment.bottomRight,
+      ),
+    ),
+    child: Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
+      children: [
+        Image.asset(SbmIdentity.logoAsset,
+          width: compact ? 195 : 360,
+          height: compact ? 110 : 205,
+          fit: BoxFit.contain,
+          semanticLabel: 'SBM Services logo'),
+        SizedBox(height: compact ? 5 : 17),
+        Text('ShopDesk Pro', textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800,
+            fontSize: compact ? 22 : 34, letterSpacing: -.6)),
+        const SizedBox(height: 8),
+        Text('Complete Shop Management Solution', textAlign: TextAlign.center,
+          style: TextStyle(color: Color(0xFFD8EAFB),
+            fontSize: compact ? 11 : 15)),
+        if (!compact) ...[
+          const SizedBox(height: 38),
+          const Wrap(alignment: WrapAlignment.center, spacing: 15, runSpacing: 14,
+            children: [
+              _BrandFeature(Icons.point_of_sale_rounded, 'POS & Sales'),
+              _BrandFeature(Icons.inventory_2_outlined, 'Inventory'),
+              _BrandFeature(Icons.shopping_cart_outlined, 'Purchases'),
+              _BrandFeature(Icons.badge_outlined, 'Employees'),
+              _BrandFeature(Icons.analytics_outlined, 'Reports'),
+            ]),
+          const SizedBox(height: 36),
+          const Text('Simple   •   Reliable   •   Offline',
+            style: TextStyle(color: Color(0xFFBDD9F7), fontSize: 12)),
+        ],
+      ],
+    ),
+  );
+
+  Widget _formPanel() => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 22),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: NexaPanel(
+          padding: const EdgeInsets.symmetric(horizontal: 31, vertical: 31),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Align(alignment: Alignment.centerLeft,
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: const Color(0xFFE6F2FF),
+                    borderRadius: BorderRadius.circular(11)),
+                  child: Icon(icon, color: Nexa.brightBlue, size: 26),
+                ),
+              ),
+              const SizedBox(height: 17),
+              Text(heading,
+                style: const TextStyle(color: Nexa.white,
+                  fontWeight: FontWeight.w800, fontSize: 25)),
+              const SizedBox(height: 8),
+              Text(subtitle,
+                style: const TextStyle(color: Nexa.muted,
+                  fontSize: 12, height: 1.55)),
+              const SizedBox(height: 24),
+              child,
+              const SizedBox(height: 17),
+              const Text('OFFLINE  •  SQLITE  •  SECURE LOCAL DATA',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Nexa.secondary,
+                  fontSize: 10, letterSpacing: .8)),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
     final old = Theme.of(context);
     final authTheme = old.copyWith(
-      brightness: Brightness.light,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: Nexa.brightBlue,
-        brightness: Brightness.light,
-        surface: Nexa.panel,
-      ),
+      colorScheme: ColorScheme.fromSeed(seedColor: Nexa.brightBlue),
       textTheme: old.textTheme.apply(bodyColor: Nexa.white, displayColor: Nexa.white),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: const Color(0xFFF3F8FF),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 17),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 16),
         labelStyle: const TextStyle(color: Nexa.muted),
         hintStyle: const TextStyle(color: Nexa.secondary),
         prefixIconColor: Nexa.secondary,
         suffixIconColor: Nexa.secondary,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Nexa.outline)),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Nexa.outline)),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Nexa.brightBlue, width: 1.6)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Nexa.outline)),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Nexa.outline)),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Nexa.brightBlue, width: 1.6)),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           backgroundColor: Nexa.brightBlue,
           foregroundColor: Colors.white,
-          minimumSize: const Size(100, 51),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
-      ),
-      outlinedButtonTheme: OutlinedButtonThemeData(
-        style: OutlinedButton.styleFrom(
-          foregroundColor: Nexa.brightBlue,
-          minimumSize: const Size(100, 51),
-          side: const BorderSide(color: Nexa.outline),
+          minimumSize: const Size(100, 49),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
       ),
     );
+
     return Theme(
       data: authTheme,
       child: Scaffold(
-        body: DecoratedBox(
-          decoration: const BoxDecoration(gradient: Nexa.pageGradient),
-          child: SizedBox.expand(
-            child: Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(25),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: maxWidth),
-                  child: NexaPanel(
-                    padding: const EdgeInsets.symmetric(horizontal: 34, vertical: 34),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Center(
-                          child: Container(
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              gradient: Nexa.blueGradient,
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: Icon(icon, color: Colors.white, size: 26),
-                          ),
-                        ),
-                        const SizedBox(height: 19),
-                        const Text('SHOPDESK PRO', textAlign: TextAlign.center,
-                          style: TextStyle(color: Nexa.brightBlue, fontWeight: FontWeight.w800, letterSpacing: 2.1, fontSize: 11)),
-                        const SizedBox(height: 9),
-                        Text(heading, textAlign: TextAlign.center,
-                          style: const TextStyle(color: Nexa.white, fontWeight: FontWeight.w800, fontSize: 25)),
-                        const SizedBox(height: 8),
-                        Text(subtitle, textAlign: TextAlign.center,
-                          style: const TextStyle(color: Nexa.muted, fontSize: 12, height: 1.5)),
-                        const SizedBox(height: 27),
-                        child,
-                        const SizedBox(height: 21),
-                        const Text('OFFLINE  •  SQLITE  •  SECURE LOCAL DATA', textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 10, color: Nexa.secondary, letterSpacing: 1)),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
+        backgroundColor: Nexa.background,
+        body: SafeArea(
+          child: Column(children: [
+            Expanded(child: LayoutBuilder(builder: (context, size) {
+              if (size.maxWidth >= 900) {
+                return Row(children: [
+                  Expanded(flex: 43, child: _brandPanel()),
+                  Expanded(flex: 57, child: _formPanel()),
+                ]);
+              }
+              return SingleChildScrollView(
+                child: Column(children: [
+                  _brandPanel(compact: true),
+                  _formPanel(),
+                ]),
+              );
+            })),
+            const SbmFooter(),
+          ]),
         ),
       ),
     );
   }
+}
+
+class _BrandFeature extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  const _BrandFeature(this.icon, this.title);
+  @override Widget build(BuildContext context) => SizedBox(
+    width: 95,
+    child: Column(children: [
+      Icon(icon, color: Color(0xFF9FD3FF), size: 26),
+      const SizedBox(height: 7),
+      Text(title, textAlign: TextAlign.center,
+        style: const TextStyle(color: Colors.white, fontSize: 11,
+          fontWeight: FontWeight.w600)),
+    ]),
+  );
 }

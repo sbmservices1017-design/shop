@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'store.dart';
+import 'payroll_math.dart';
+import 'payroll_dialog.dart';
 import 'extensions.dart';
 import 'reporting.dart';
 import 'commercial_core.dart';
@@ -11,6 +13,7 @@ import 'boot_setup.dart';
 import 'settings_hub.dart';
 import 'license_widgets.dart';
 import 'nexa_theme.dart';
+import 'brand_identity.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -126,7 +129,7 @@ class _ShellState extends State<Shell> {
   @override Widget build(BuildContext context){
     final core=CommercialCore.instance;
     final available=[for(var i=0;i<menu.length;i++)if(core.current?.allowed(moduleKey(i),'view')==true)i];
-    if(available.isEmpty)return Scaffold(body:Center(child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[const Text('No modules assigned to this account.'),TextButton(onPressed:core.signOut,child:const Text('Sign out'))])));
+    if(available.isEmpty)return Scaffold(body:Column(children:[Expanded(child:Center(child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[const Text('No modules assigned to this account.'),TextButton(onPressed:core.signOut,child:const Text('Sign out'))]))),const SbmFooter()]));
     if(!available.contains(page))page=available.first;
     final dark=false;
     return Scaffold(backgroundColor:dark?Nexa.background:bg,body:Row(children:[
@@ -161,6 +164,7 @@ class _ShellState extends State<Shell> {
           IconButton(tooltip:'Sign out',onPressed:core.signOut,icon:Icon(Icons.logout,size:18,color:dark?Nexa.muted:ink)),
         ])),
         Expanded(child:KeyedSubtree(key:ValueKey('$page-$revision'),child:screen())),
+        const SbmFooter(),
       ])),
     ]));
   }
@@ -552,12 +556,28 @@ class _EmployeeScreenState extends State<EmployeeScreen>{final s=Store.instance;
     final f=await ask(context,'Advance • ${p['name']}',[const FieldSpec('amount','Advance Rs.',numeric:true),FieldSpec('account','Paid from',choices:ac)]);
     if(f!=null)await s.employeeAdvance(p['id'] as int,double.parse(f['amount']!),int.parse(f['account']!));
   }
-  Future<void> salary(Map<String,Object?> p)async{final ac=await accountChoices(s);if(!mounted)return;
-    final f=await ask(context,'Run salary • ${p['name']}',[FieldSpec('period','Period YYYY-MM',initial:nowDate().substring(0,7)),const FieldSpec('recovery','Advance recovery Rs.',numeric:true,initial:'0'),const FieldSpec('pay','Pay now Rs.',numeric:true,initial:'0'),FieldSpec('account','Paid from',choices:ac)]);
-    if(f!=null)await s.payrollRun(p['id'] as int,f['period']!,double.parse(f['recovery']!),double.parse(f['pay']!),int.parse(f['account']!));
+  Future<void> salary(Map<String,Object?> p)async{
+    final ac=await accountChoices(s);
+    if(!mounted)return;
+    final posted=await showDialog<bool>(context:context,builder:(ctx)=>PayrollDialog(
+      employeeId:p['id'] as int,
+      employeeName:'${p['name']}',
+      quote:PayrollQuote((p['salary'] as num).toInt(),(p['advance'] as num).toInt()),
+      cashAccounts:ac,
+    ));
+    if(posted==true)widget.onChange();
   }
-  Future<void> settle(Map<String,Object?> p)async{final ac=await accountChoices(s);if(!mounted)return;
-    final f=await ask(context,'Pay outstanding salary • ${p['name']}',[const FieldSpec('amount','Amount Rs.',numeric:true),FieldSpec('account','Payment account',choices:ac)]);
+  Future<void> settle(Map<String,Object?> p)async{
+    final due=(p['salary_due'] as num).toInt();
+    if(due<=0){
+      if(mounted)await showError(context,const FormatException('No outstanding salary is due. Use Run payroll to process this month first.'));
+      return;
+    }
+    final ac=await accountChoices(s);if(!mounted)return;
+    final f=await ask(context,'Pay outstanding salary • ${p['name']}',[
+      FieldSpec('amount','Pay salary due (max Rs. ${pkr(due)})',numeric:true,initial:pkr(due)),
+      FieldSpec('account','Payment account',choices:ac),
+    ]);
     if(f!=null)await s.paySalaryBalance(p['id'] as int,double.parse(f['amount']!),int.parse(f['account']!));
   }
   Future<void> ledger(Map<String,Object?> p)async{
@@ -569,10 +589,15 @@ class _EmployeeScreenState extends State<EmployeeScreen>{final s=Store.instance;
       OutlinedButton(onPressed:()=>Exports.pdf(report,print:true),child:const Text('Print A4')),
       TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))]));
   }
-  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read('''SELECT e.*,coalesce((SELECT sum(CASE WHEN kind='ADVANCE' THEN amount WHEN kind='RECOVERY' THEN -amount ELSE 0 END) FROM employee_ledger l WHERE l.employee_id=e.id),0) AS advance FROM employees e WHERE active=1 ORDER BY name'''),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
+  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read('''SELECT e.*,
+    coalesce((SELECT sum(CASE WHEN kind='ADVANCE' THEN amount WHEN kind='RECOVERY' THEN -amount ELSE 0 END)
+      FROM employee_ledger l WHERE l.employee_id=e.id),0) AS advance,
+    coalesce((SELECT sum(CASE WHEN kind='SALARY_DUE' THEN amount WHEN kind IN ('RECOVERY','SALARY_PAID') THEN -amount ELSE 0 END)
+      FROM employee_ledger l WHERE l.employee_id=e.id),0) AS salary_due
+    FROM employees e WHERE active=1 ORDER BY name'''),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
     return pageWrap([section('Employees, advances & payroll',action:addButton('Add employee',()=>change(employee))),
-      listing(['Employee','Designation','Monthly Salary','Advance Due','Actions'],snap.data!.map((e)=>[txt(e['name']),txt(e['designation']),txt(funds(e['salary'])),txt(funds(e['advance'])),buttons([
-        small('Give advance',()=>change(()=>advance(e)),icon:Icons.savings_outlined),small('Run payroll',()=>change(()=>salary(e)),icon:Icons.calculate_outlined),small('Pay salary due',()=>change(()=>settle(e)),icon:Icons.currency_exchange_outlined),small('Ledger',()=>ledger(e),icon:Icons.menu_book),
+      listing(['Employee','Designation','Monthly Salary','Advance Due','Salary Due','Actions'],snap.data!.map((e)=>[txt(e['name']),txt(e['designation']),txt(funds(e['salary'])),txt(funds(e['advance'])),txt(funds(e['salary_due'])),buttons([
+        small('Give advance',()=>change(()=>advance(e)),icon:Icons.savings_outlined),small('Run payroll',()=>salary(e),icon:Icons.calculate_outlined),small('Pay salary due',()=>change(()=>settle(e)),icon:Icons.currency_exchange_outlined),small('Ledger',()=>ledger(e),icon:Icons.menu_book),
         small('Edit salary',()=>change(()async{final f=await ask(context,'Employee details',[FieldSpec('name','Name',initial:'${e['name']}'),FieldSpec('role','Role',initial:'${e['designation']}'),FieldSpec('salary','Salary Rs.',initial:'${rupees(e['salary'])}',numeric:true)]);if(f!=null)await s.db.rawUpdate('UPDATE employees SET name=?,designation=?,salary=? WHERE id=?',[f['name'],f['role'],pennies(double.parse(f['salary']!)),e['id']]);})),small('Archive',()=>change(()async{if(await confirm(context,'Archive this employee? Ledger and past payroll stay available.'))await s.archive('employees',e['id'] as int);}),icon:Icons.archive_outlined)
       ])]).toList())]);
   });

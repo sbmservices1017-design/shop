@@ -160,6 +160,57 @@ void main(){
     expect(report.rows.last.last,'750.00');
   });
 
+
+  test('40,000 salary with 5,000 advance recovery pays 35,000 and clears balances',()async{
+    final cash=(await s.read("SELECT id FROM accounts WHERE code='1000'")).first['id'] as int;
+    final employee=await s.addEmployee('Payroll Example 40k','Shop Assistant',40000);
+    await s.employeeAdvance(employee,5000,cash);
+    final id=await s.payrollRun(employee,'2026-12',5000,35000,cash);
+    final row=(await s.read('SELECT gross,recovery,net,paid FROM payroll WHERE id=?',[id])).first;
+    expect(row['gross'],4000000);
+    expect(row['recovery'],500000);
+    expect(row['net'],3500000);
+    expect(row['paid'],3500000);
+    final balances=(await s.read('''SELECT
+      sum(CASE WHEN kind='ADVANCE' THEN amount WHEN kind='RECOVERY' THEN -amount ELSE 0 END) advance,
+      sum(CASE WHEN kind='SALARY_DUE' THEN amount WHEN kind IN ('RECOVERY','SALARY_PAID') THEN -amount ELSE 0 END) salaryDue
+      FROM employee_ledger WHERE employee_id=?''',[employee])).first;
+    expect(balances['advance'],0);
+    expect(balances['salaryDue'],0);
+    expect(await s.read('''SELECT j.id FROM journal j JOIN journal_lines l ON l.journal_id=j.id
+      GROUP BY j.id HAVING sum(l.debit-l.credit)<>0'''),isEmpty);
+    await expectLater(s.payrollRun(employee,'2026-12',0,40000,cash),throwsFormatException);
+  });
+
+  test('Payroll partial payment leaves correct salary due, can be settled later',()async{
+    final cash=(await s.read("SELECT id FROM accounts WHERE code='1000'")).first['id'] as int;
+    final employee=await s.addEmployee('Payroll Partial Pay','Assistant',40000);
+    await s.employeeAdvance(employee,5000,cash);
+    await s.payrollRun(employee,'2027-01',5000,30000,cash);
+    var due=(await s.read('''SELECT sum(CASE WHEN kind='SALARY_DUE' THEN amount
+      WHEN kind IN ('RECOVERY','SALARY_PAID') THEN -amount ELSE 0 END) due
+      FROM employee_ledger WHERE employee_id=?''',[employee])).first['due'];
+    expect(due,500000);
+    await s.paySalaryBalance(employee,5000,cash);
+    due=(await s.read('''SELECT sum(CASE WHEN kind='SALARY_DUE' THEN amount
+      WHEN kind IN ('RECOVERY','SALARY_PAID') THEN -amount ELSE 0 END) due
+      FROM employee_ledger WHERE employee_id=?''',[employee])).first['due'];
+    expect(due,0);
+    await expectLater(s.paySalaryBalance(employee,1,cash),throwsFormatException);
+  });
+
+  test('Overpaying gross amount when recovery is applied is rejected without postings',()async{
+    final cash=(await s.read("SELECT id FROM accounts WHERE code='1000'")).first['id'] as int;
+    final employee=await s.addEmployee('Payroll Overpay Test','Assistant',40000);
+    await s.employeeAdvance(employee,5000,cash);
+    await expectLater(s.payrollRun(employee,'2027-02',5000,40000,cash),throwsA(
+      isA<FormatException>().having((e)=>e.message,'error',contains('35000.00'))));
+    expect((await s.read('SELECT count(*) AS n FROM payroll WHERE employee_id=?',[employee])).first['n'],0);
+    final advance=(await s.read('''SELECT sum(CASE WHEN kind='ADVANCE' THEN amount
+      WHEN kind='RECOVERY' THEN -amount ELSE 0 END) bal FROM employee_ledger WHERE employee_id=?''',[employee])).first['bal'];
+    expect(advance,500000);
+  });
+
   test('opening balances and outstanding salary settlement',()async{
     final party=await s.addParty('supplier','Opening Vendor','','');
     await s.openingPartyBalance(party,800,'Opening supplier payable');

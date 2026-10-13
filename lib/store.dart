@@ -1,6 +1,7 @@
 // Build source revision: SHOPDESK_SOURCE_0_4_2_ANALYZER_FIX
 import 'dart:io';
 import 'dart:convert';
+import 'payroll_math.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -322,10 +323,22 @@ class Store {
   }
   Future<int> payrollRun(int employee,String period,double recovery,double payNow,int cashAccount) async => db.transaction((t)async{
     final rows=await t.rawQuery('SELECT salary FROM employees WHERE id=? AND active=1',[employee]);if(rows.isEmpty)throw const FormatException('Employee not found');
-    final gross=rows.first['salary'] as int;final rec=pennies(recovery);final pay=pennies(payNow);
+    if(!recovery.isFinite||!payNow.isFinite) {
+      throw const FormatException('Recovery and payment amounts must be valid numbers');
+    }
+    if(!RegExp(r'^\d{4}-(0[1-9]|1[0-2])$').hasMatch(period)) {
+      throw const FormatException('Choose a valid payroll period in YYYY-MM format');
+    }
+    final previous=await t.rawQuery('SELECT id FROM payroll WHERE employee_id=? AND period=? LIMIT 1',[employee,period]);
+    if(previous.isNotEmpty) {
+      throw FormatException('Payroll has already been processed for $period. Use a different period; do not pay the same month twice.');
+    }
+    final gross=(rows.first['salary'] as num).toInt();
+    final rec=pennies(recovery),pay=pennies(payNow);
     final adv=await t.rawQuery("SELECT coalesce(sum(CASE WHEN kind='ADVANCE' THEN amount WHEN kind='RECOVERY' THEN -amount ELSE 0 END),0) AS bal FROM employee_ledger WHERE employee_id=?",[employee]);
-    if(rec<0||rec>(adv.first['bal'] as num).toInt()||rec>gross)throw const FormatException('Advance recovery exceeds available advance or salary');
-    final net=gross-rec;if(pay<0||pay>net)throw const FormatException('Salary payment exceeds net due');
+    final quote=PayrollQuote(gross,(adv.first['bal'] as num).toInt());
+    final net=quote.netPayable(rec);
+    quote.salaryDue(rec,pay); // Validates Pay Now against net salary, not gross salary.
     final id=await t.rawInsert('INSERT INTO payroll(employee_id,period,gross,recovery,net,paid,date) VALUES(?,?,?,?,?,?,?)',[employee,period,gross,rec,net,pay,nowDate()]);
     for(final e in <List<Object>>[['SALARY_DUE',gross],['RECOVERY',rec],['SALARY_PAID',pay]]){
       if((e[1] as int)>0)await t.rawInsert('INSERT INTO employee_ledger(employee_id,date,kind,amount,source_type,source_id,note) VALUES(?,?,?,?,?,?,?)',[employee,nowDate(),e[0],e[1],'payroll',id,period]);
