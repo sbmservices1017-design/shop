@@ -1,1 +1,1 @@
-ShopDesk Pro v0.6.0 — integrated first-run/setup, 48-hour trial, advanced dashboard, settings hub, restore
+ShopDesk Pro v0.6.1 — same v0.6 features, analyzer fix for SettingsHub.verifyDatabase and lifecycle-safe license activation.

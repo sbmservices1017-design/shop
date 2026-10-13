@@ -1,8 +1,10 @@
-# ShopDesk Pro v0.6.0 — Integrated Flutter Windows Source
+**v0.6.1 Hotfix:** Import the existing `ShopDeskExtendedOperations.verifyDatabase` extension in Settings Hub; prevent the license activation handler from overriding Flutter `State.activate`; remove three unused imports. No schema/data migration introduced. Run GitHub Actions to verify compilation; local Flutter SDK not available.
+
+# ShopDesk Pro v0.6.1 — Integrated Flutter Windows Source
 
 This project preserves the pre-existing inventory/billing/accounts/HR/reporting modules and integrates the user-requested commercial desktop upgrades in one Flutter project and one GitHub Windows build workflow.
 
-## New in v0.6.0
+## New in v0.6.1
 
 - First application launch: choose **Create New Database** or **Restore Existing Backup**. For an existing ShopDesk SQLite file, this wizard is skipped. Restoration is integrity-checked and performed BEFORE the database is opened.
 - New owner registration with shop details, login on subsequent launches. Login and passwords remain local to SQLite.
@@ -18,7 +20,7 @@ This project preserves the pre-existing inventory/billing/accounts/HR/reporting 
 1. BACK UP your existing, working `main` branch and ShopDesk SQLite file first.
 2. Create a new `shopdesk-pro-v0.6` branch. Do not immediately overwrite your working release.
 3. Upload **contents of this ShopDesk folder** to repository root, including hidden `.github/workflows/windows-build.yml`.
-4. GitHub **Actions → Build ShopDesk Windows EXE (v0.6.0) → Run workflow**. Ensure analyzer, Flutter tests and Windows build all pass.
+4. GitHub **Actions → Build ShopDesk Windows EXE (v0.6.1) → Run workflow**. Ensure analyzer, Flutter tests and Windows build all pass.
 5. Download the `ShopDesk-Windows-Release` artifact and extract ALL files together (EXE + DLL + data). Compare against your working version on a COPY of your live DB before production usage.
 
 ## Owner private key generator

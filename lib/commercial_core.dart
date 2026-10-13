@@ -6,7 +6,6 @@ import 'package:path/path.dart' as p;
 import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart' as digest;
 import 'package:cryptography/cryptography.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'store.dart';
 import 'license_public.dart';
 
