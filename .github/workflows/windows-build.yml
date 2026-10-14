@@ -1,4 +1,4 @@
-name: Build ShopDesk Windows EXE (v0.9.6)
+name: Build ShopDesk Windows EXE (v0.9.7)
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           if (-not (Test-Path 'lib/commercial_core.dart')) { throw 'Commercial upgrade source missing' }
           if (-not (Test-Path 'lib/license_public.dart')) { throw 'License public key missing' }
           if (Test-Path 'shopdesk_license_private.pem') { throw 'PRIVATE SIGNING KEY MUST NEVER BE COMMITTED TO GITHUB' }
-          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('SHOPDESK_SOURCE_0_9_6'))) { throw 'ShopDesk v0.9.6 source version missing' }
+          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('SHOPDESK_SOURCE_0_9_7'))) { throw 'ShopDesk v0.9.7 source version missing' }
           if (-not $source.Contains('paymentAccountOptions')) { throw 'Payment account holder/ID helper missing' }
           if (-not $source.Contains('postDocumentSplit')) { throw 'Split tender accounting not uploaded' }
           if (-not $source.Contains('recordInvoiceInstallment')) { throw 'Invoice installment handler missing' }
@@ -70,7 +70,7 @@ jobs:
           if (-not (Test-Path 'assets/branding/sbm_logo.png')) { throw 'SBM transparent logo missing' }
           if (-not ((Get-Content 'lib/main.dart' -Raw).Contains('const SbmFooter()'))) { throw 'SBM global footer missing from Shell' }
           if (-not ((Get-Content 'lib/nexa_theme.dart' -Raw).Contains('Expanded(flex: 43, child: _brandPanel())'))) { throw 'SBM split-screen login layout missing' }
-          Write-Host 'ShopDesk v0.9.6 simple catalog and POS source layout confirmed'  
+          Write-Host 'ShopDesk v0.9.7 simple catalog and POS source layout confirmed'  
 
       - name: Generate native Windows files
         run: flutter create --platforms=windows --project-name shopdesk_flutter --no-pub .

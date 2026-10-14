@@ -17,7 +17,7 @@ void main(){
   test('sales POS: cash + bank + wallet plus a later installment reconcile exactly',()async{
     final cat=await store.addCategory('Split sale items');
     final product=await store.addProduct(cat,'Mattress Deluxe');
-    final variant=await store.createSimpleVariant(productId:product,size:'Double',color:'Blue');
+    final variant=await store.createSimpleVariant(productId:product,size:'Double',color:'Blue',packing:'piece',packSize:1);
     final customer=await store.addParty('customer','Split Customer','','');
     final cash=(await store.read("SELECT id FROM accounts WHERE code='1000'")).first['id'] as int;
     final bank=(await store.read("SELECT id FROM accounts WHERE code='1010'")).first['id'] as int;
@@ -68,7 +68,7 @@ void main(){
     expect(units.any((x)=>x['unit']=='roll'&&numVal(x['factor'])==90),true);
     expect(units.any((x)=>x['unit']=='ft'),true);
     expect(units.any((x)=>x['unit']=='gazz'&&numVal(x['factor'])==3),true);
-    final sheet=await store.createSimpleVariant(productId:prod,packing:'table_sheet_roll',sheetsPerRoll:20,openingPacks:2);
+    final sheet=await store.createSimpleVariant(productId:prod,packing:'table_sheet_roll',packSize:1,sheetsPerRoll:20,openingPacks:2);
     expect((await store.unitOptions(sheet,sale:true)).any((u)=>u['unit']=='roll'&&numVal(u['factor'])==20),true);
     final stockBefore=numVal((await store.stock()).firstWhere((r)=>r['id']==sheet)['qty']);
     await store.adjustStock(sheet,-3,'Damaged sheets');

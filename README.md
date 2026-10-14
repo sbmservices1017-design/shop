@@ -27,3 +27,7 @@ All invoice lines, split payments, stock movements, party ledger, and journal li
 
 Upload the **contents** of `ShopDesk/` to the repository root (including hidden `.github/`). In GitHub Actions run `Build ShopDesk Windows EXE (v0.9.6)`. Download the whole Windows release ZIP, not EXE alone. The app needs associated Flutter DLL/data files.
 
+
+
+## v0.9.7 analyzer correction
+See `FIX_NOTES_V0_9_7.md`. This update repairs one POS split-payment widget syntax error and supplies missing test variation parameters. No inventory, accounting, payroll, or licensing business methods were modified.

@@ -212,7 +212,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
             keyboardType:const TextInputType.numberWithOptions(decimal:true),
             decoration:const InputDecoration(labelText:'Amount (Rs.)',isDense:true),onChanged:(_)=>setState((){}))),
           IconButton(tooltip:'Remove payment',onPressed:(){setState(()=>extraPayments.remove(row));row.dispose();},icon:const Icon(Icons.close))
-        ])));})),
+        ]));})),
     if(extraPayments.isNotEmpty)Text('Received / Paid: ${money(payment)} · Remaining credit: ${money(total-payment)}',
       style:const TextStyle(color:Color(0xFF28577F),fontSize:12,fontWeight:FontWeight.w600)),
     if(error!=null)Padding(padding:const EdgeInsets.all(7),child:Text(error!,style:const TextStyle(color:Colors.red,fontSize:12))),const SizedBox(height:9),
