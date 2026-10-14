@@ -103,45 +103,102 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
   }
   Future<void> _addVariation(int productId)async{
     final form=GlobalKey<FormState>();
-    final fields={for(final name in ['size','color','design','quality','packSize','gazz','opening'])name:TextEditingController()};
-    fields['packSize']!.text='1';fields['gazz']!.text='3';fields['opening']!.text='0';
+    final fields={for(final name in ['size','color','design','quality','packSize','gazzPerRoll','sheetGazz','opening'])name:TextEditingController()};
+    fields['packSize']!.text='1';
+    fields['gazzPerRoll']!.text='30';
+    fields['sheetGazz']!.text='2';
+    fields['opening']!.text='0';
     String packing='piece';
-    String packLabel()=>switch(packing){'set'=>'How many pieces in one Set?','packet'=>'How many pieces in one Packet?','roll'=>'How many Feet in one Roll?',_=>'Pieces per Piece'};
+    bool tableSheet=false;
+    String packLabel()=>switch(packing){
+      'set'=>'Pieces in one Set',
+      'packet'=>'Pieces in one Packet',
+      _=>'Pieces',
+    };
+    String openingLabel()=>switch(packing){
+      'roll'=>'Roll quantity',
+      'set'=>'Set quantity',
+      'packet'=>'Packet quantity',
+      _=>'Piece quantity',
+    };
     try{
       final values=await showDialog<Map<String,String>?>(context:context,builder:(context)=>StatefulBuilder(builder:(ctx,setModal)=>AlertDialog(
-        title:const Text('Step 3 · Add Size / Color / Pack'),scrollable:true,
-        content:SizedBox(width:485,child:Form(key:form,child:Column(mainAxisSize:MainAxisSize.min,children:[
-          const Align(alignment:Alignment.centerLeft,child:Text('Variation details (optional)',style:TextStyle(fontWeight:FontWeight.w700))),const SizedBox(height:10),
-          Row(children:[Expanded(child:TextFormField(controller:fields['size'],decoration:const InputDecoration(labelText:'Size',hintText:'6 × 4, Double'))),
-            const SizedBox(width:10),Expanded(child:TextFormField(controller:fields['color'],decoration:const InputDecoration(labelText:'Color',hintText:'Red, Blue')))]),
-          const SizedBox(height:10),Row(children:[Expanded(child:TextFormField(controller:fields['design'],decoration:const InputDecoration(labelText:'Design',hintText:'Flower, Plain'))),
-            const SizedBox(width:10),Expanded(child:TextFormField(controller:fields['quality'],decoration:const InputDecoration(labelText:'Quality',hintText:'Premium')))]),
-          const SizedBox(height:17),DropdownButtonFormField<String>(initialValue:packing,decoration:const InputDecoration(labelText:'How do you purchase this product?'),
-            items:const [DropdownMenuItem(value:'piece',child:Text('Single Piece')),
-              DropdownMenuItem(value:'set',child:Text('Set (e.g. 3 pieces)')),
-              DropdownMenuItem(value:'packet',child:Text('Packet (e.g. 12 pieces)')),
-              DropdownMenuItem(value:'roll',child:Text('Roll (sell in Feet / Gazz)'))],
-            onChanged:(v){if(v==null)return;setModal((){packing=v;fields['packSize']!.text=switch(v){'set'=>'3','packet'=>'12','roll'=>'100',_=>'1'};});}),
-          if(packing!='piece')...[const SizedBox(height:11),TextFormField(controller:fields['packSize'],keyboardType:const TextInputType.numberWithOptions(decimal:true),
-            decoration:InputDecoration(labelText:packLabel(),helperText:packing=='roll'?'e.g. 1 Roll = 100 Feet':'Sale can also be done as loose Pieces'),
-            validator:(s){final n=double.tryParse(s??'');return n==null||n<=0?'Enter a valid quantity':null;})],
-          if(packing=='roll')...[const SizedBox(height:10),TextFormField(controller:fields['gazz'],keyboardType:const TextInputType.numberWithOptions(decimal:true),
-            decoration:const InputDecoration(labelText:'Feet per Gazz',helperText:'Default: 1 Gazz = 3 Feet (editable)'),
-            validator:(s){final n=double.tryParse(s??'');return n==null||n<=0?'Enter feet per Gazz':null;})],
-          const SizedBox(height:12),TextFormField(controller:fields['opening'],keyboardType:const TextInputType.numberWithOptions(decimal:true),
-            decoration:InputDecoration(labelText:'Opening quantity',helperText:'Enter in ${packing=='piece'?'Pieces':packing=='roll'?'Rolls':packing=='set'?'Sets':'Packets'}; zero is fine'),
-            validator:(s){final n=double.tryParse(s??'');return n==null||n<0?'Must be zero or more':null;}),
-          const SizedBox(height:12),Container(width:double.infinity,padding:const EdgeInsets.all(10),decoration:BoxDecoration(color:const Color(0xFFEDF6FF),borderRadius:BorderRadius.circular(9)),
-            child:Text(switch(packing){'roll'=>'Buy in Rolls; sell in Feet, Gazz or Rolls. Stock is tracked in Feet.',
-            'set'=>'Buy Sets or Pieces; sell Sets or loose Pieces. Stock is tracked in Pieces.',
-            'packet'=>'Buy Packets or Pieces; sell Packets or loose Pieces. Stock is tracked in Pieces.',
-            _=>'Buy and sell in Pieces. Each Size/Color has separate stock.'},style:const TextStyle(fontSize:12,color:Color(0xFF28577F))))
+        title:const Text('Add Product Variation'),scrollable:true,
+        content:SizedBox(width:490,child:Form(key:form,child:Column(mainAxisSize:MainAxisSize.min,children:[
+          const Align(alignment:Alignment.centerLeft,child:Text('Size / Color / Design (optional)',style:TextStyle(fontWeight:FontWeight.w700))),
+          const SizedBox(height:10),
+          Row(children:[Expanded(child:TextFormField(controller:fields['size'],decoration:const InputDecoration(labelText:'Size',hintText:'6 x 4, Double'))),
+            const SizedBox(width:10),Expanded(child:TextFormField(controller:fields['color'],decoration:const InputDecoration(labelText:'Color',hintText:'Blue')))]),
+          const SizedBox(height:10),Row(children:[Expanded(child:TextFormField(controller:fields['design'],decoration:const InputDecoration(labelText:'Design'))),
+            const SizedBox(width:10),Expanded(child:TextFormField(controller:fields['quality'],decoration:const InputDecoration(labelText:'Quality')))]),
+          const SizedBox(height:16),DropdownButtonFormField<String>(initialValue:packing,
+            decoration:const InputDecoration(labelText:'Product comes as'),
+            items:const [DropdownMenuItem(value:'piece',child:Text('Pieces')),
+              DropdownMenuItem(value:'set',child:Text('Set (3, 5, 7, 9 or any number)')),
+              DropdownMenuItem(value:'packet',child:Text('Packet (sell loose Pieces too)')),
+              DropdownMenuItem(value:'roll',child:Text('Roll (sell Feet / Gazz / Table Sheet)'))],
+            onChanged:(v){if(v==null)return;setModal((){
+              packing=v;
+              tableSheet=false;
+              fields['packSize']!.text=switch(v){'set'=>'3','packet'=>'12',_=>'1'};
+            });}),
+          if(packing=='set'||packing=='packet') ...[
+            const SizedBox(height:12),TextFormField(controller:fields['packSize'],
+              keyboardType:const TextInputType.numberWithOptions(decimal:false),
+              decoration:InputDecoration(labelText:packLabel(),helperText:'Can also sell loose Pieces'),
+              validator:(s){final n=int.tryParse(s?.trim()??'');return n==null||n<1?'Enter whole number of pieces':null;}),
+            const SizedBox(height:8),Wrap(spacing:7,runSpacing:6,children:[for(final size in [3,5,7,9,12])
+              ActionChip(label:Text('$size Pieces'),onPressed:()=>setModal(()=>fields['packSize']!.text='$size'))]),
+          ],
+          if(packing=='roll') ...[
+            const SizedBox(height:12),TextFormField(controller:fields['gazzPerRoll'],
+              keyboardType:const TextInputType.numberWithOptions(decimal:true),
+              onChanged:(_)=>setModal((){}),
+              decoration:const InputDecoration(labelText:'How many Gazz in one Roll?',helperText:'Feet calculated automatically: 1 Gazz = 3 Feet'),
+              validator:(s){final n=double.tryParse(s?.trim()??'');return n==null||!n.isFinite||n<=0?'Enter Gazz in one Roll':null;}),
+            const SizedBox(height:8),Align(alignment:Alignment.centerLeft,child:Text(
+              '1 Roll = ${((double.tryParse(fields['gazzPerRoll']!.text)??0)*3).toStringAsFixed(2)} Feet',
+              style:const TextStyle(color:Color(0xFF1D68B2),fontWeight:FontWeight.w700))),
+            const SizedBox(height:8),CheckboxListTile(contentPadding:EdgeInsets.zero,
+              title:const Text('Sell this Roll as Table Sheets too'),
+              subtitle:const Text('Enter how many Gazz are cut for 1 Table Sheet'),
+              value:tableSheet,onChanged:(v)=>setModal(()=>tableSheet=v??false)),
+            if(tableSheet)TextFormField(controller:fields['sheetGazz'],
+              keyboardType:const TextInputType.numberWithOptions(decimal:true),
+              decoration:const InputDecoration(labelText:'Gazz used for 1 Table Sheet',helperText:'Example: 2 Gazz = 6 Feet per Table Sheet'),
+              validator:(s){final n=double.tryParse(s?.trim()??'');
+                final roll=double.tryParse(fields['gazzPerRoll']!.text)??0;
+                return n==null||!n.isFinite||n<=0||n>roll?'Enter a valid cut length not exceeding the Roll':null;}),
+          ],
+          const SizedBox(height:13),TextFormField(controller:fields['opening'],
+            keyboardType:const TextInputType.numberWithOptions(decimal:true),
+            decoration:InputDecoration(labelText:openingLabel(),helperText:'Current stock in this packing; enter 0 if none'),
+            validator:(s){final n=double.tryParse(s?.trim()??'');
+              if(n==null||!n.isFinite||n<0)return 'Must be zero or more';
+              if(packing!='roll' && n!=n.roundToDouble())return 'Enter whole number of packs / pieces';
+              return null;}),
+          const SizedBox(height:12),Container(width:double.infinity,padding:const EdgeInsets.all(10),
+            decoration:BoxDecoration(color:const Color(0xFFEDF6FF),borderRadius:BorderRadius.circular(9)),
+            child:Text(switch(packing){
+              'roll'=>'Purchase in Rolls; sale in Feet, Gazz${tableSheet?', Table Sheets':''} or Rolls. Stock updates in Feet.',
+              'set'=>'Buy Sets; sell whole Sets or loose Pieces.',
+              'packet'=>'Buy Packets; sell Packets or loose Pieces.',
+              _=>'Each Size / Color variation has separate Piece stock.'},
+              style:const TextStyle(fontSize:12,color:Color(0xFF28577F))))
         ]))),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Cancel')),
-          FilledButton(onPressed:(){if(form.currentState!.validate())Navigator.pop(ctx,{for(final e in fields.entries)e.key:e.value.text.trim(),'packing':packing});},
-            child:const Text('Save Variation'))])));
-      if(values!=null){await store.createSimpleVariant(productId:productId,size:values['size']!,color:values['color']!,
-        design:values['design']!,quality:values['quality']!,packing:values['packing']!,packSize:double.parse(values['packSize']!),
-        feetPerGazz:double.parse(values['gazz']!),openingPacks:double.parse(values['opening']!));}
+          FilledButton(onPressed:(){if(form.currentState!.validate())Navigator.pop(ctx,{
+            for(final e in fields.entries)e.key:e.value.text.trim(),
+            'packing':packing,'tableSheet':tableSheet?'yes':'no',
+          });},child:const Text('Save Variation'))])));
+      if(values!=null){
+        final roll=values['packing']=='roll';
+        await store.createSimpleVariant(productId:productId,
+          size:values['size']!,color:values['color']!,design:values['design']!,quality:values['quality']!,
+          packing:values['packing']!,packSize:roll?1:double.parse(values['packSize']!),
+          rollGazz:roll?double.parse(values['gazzPerRoll']!):null,
+          tableSheetGazz:values['tableSheet']=='yes'?double.parse(values['sheetGazz']!):null,
+          openingPacks:double.parse(values['opening']!));
+      }
     }finally{for(final controller in fields.values){controller.dispose();}}
   }
   Future<void> _editVariation(int id)async{
@@ -164,7 +221,7 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
       ('${p['name']} ${p['category']}'.toLowerCase().contains(search.trim().toLowerCase()))).toList();
     return Padding(padding:const EdgeInsets.all(23),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
       const Text('Products & Variations',style:TextStyle(fontSize:25,fontWeight:FontWeight.w800)),const SizedBox(height:6),
-      const Text('Category → Product → Size / Color → Piece, Set, Packet or Roll. No SKU or conversion setup required.',style:TextStyle(color:Colors.blueGrey)),
+      const Text('Category → Product → Variation. Select Roll, Set, Packet or Piece; POS converts automatically.',style:TextStyle(color:Colors.blueGrey)),
       const SizedBox(height:15),Wrap(spacing:12,runSpacing:10,children:[
         SizedBox(width:260,child:TextField(decoration:const InputDecoration(prefixIcon:Icon(Icons.search),labelText:'Search products'),onChanged:(v)=>setState(()=>search=v))),
         SizedBox(width:230,child:DropdownButtonFormField<int?>(key:ValueKey(filterCategory),initialValue:filterCategory,

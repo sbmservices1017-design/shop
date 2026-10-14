@@ -88,3 +88,12 @@ See `docs/UPGRADE_ACCEPTANCE_V0_6.md` for the feature matrix and hands-on test c
 The source now includes a unified dark navy NexaDash-inspired layout for dashboard, login, owner registration, first-run database selection, and license activation. The left sidebar and dashboard use the supplied reference layout, with real data queried from existing SQLite tables. Sales by Category is based on POSTED sale lines, not invented demo statistics. The license countdown uses the existing 1-second timer; dashboard polls local SQLite every 5 seconds.
 
 Existing POS, stock, purchase, ledger, reporting and payroll business methods have not been rewritten in this UI update. New functional module search filters only assigned modules. As always, Windows Flutter analyzer / test / build must pass on GitHub before installing over a working release.
+
+
+## v0.9.3 — Roll/Gazz and easy POS variations
+- In Add Variation, Roll quantity and Gazz per Roll replace Feet per Roll. App computes Feet with 1 Gazz = 3 Feet.
+- Optional Table Sheet cutting: enter Gazz used per sheet; the POS sells Table Sheets and deducts Feet.
+- Dynamic Set/Packet sizes (3, 5, 7, 9, 12 or custom) and loose Piece sales.
+- Product-first POS variation dropdown shows all size/color/design/cut options.
+- Historical invoice unit factors are snapshotted as before.
+- **Flutter and Windows builds not verified in this environment.** Test on GitHub Actions.

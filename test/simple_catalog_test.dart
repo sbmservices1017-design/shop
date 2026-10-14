@@ -51,6 +51,61 @@ void main(){
     await store.voidDocument(extra);await store.voidDocument(sale);await store.voidDocument(purchase);
     expect(numVal((await store.stock()).firstWhere((r)=>r['id']==variant)['qty']),0);
   });
+  test('roll quantity and Gazz per roll automatically produce Feet; Table Sheets deduct Feet',()async{
+    final category=await store.addCategory('Dining Cloth');
+    final product=await store.addProduct(category,'Printed Table Sheet Roll');
+    final variant=await store.createSimpleVariant(
+      productId:product,design:'Floral',packing:'roll',packSize:1,
+      rollGazz:30,tableSheetGazz:2,openingPacks:2);
+    // 2 Rolls x 30 Gazz x 3 Feet/Gazz = 180 Feet.
+    expect(numVal((await store.stock()).firstWhere((r)=>r['id']==variant)['qty']),180);
+    final saleUnits=await store.unitOptions(variant,sale:true);
+    final buyingUnits=await store.unitOptions(variant,sale:false);
+    expect(saleUnits.any((x)=>x['unit']=='roll' && numVal(x['factor'])==90),true);
+    expect(saleUnits.any((x)=>x['unit']=='table sheet' && numVal(x['factor'])==6),true);
+    expect(saleUnits.any((x)=>x['unit']=='gazz' && numVal(x['factor'])==3),true);
+    expect(buyingUnits.any((x)=>x['unit']=='roll' && numVal(x['factor'])==90),true);
+    expect(buyingUnits.any((x)=>x['unit']=='table sheet'),false);
+    final customer=await store.addParty('customer','Cloth Customer','','');
+    final cash=(await store.read("SELECT id FROM accounts WHERE code='1000'")).first['id'] as int;
+    final invoice=await store.postDocument('sale',customer,nowDate(),[
+      ItemLine(variant,4,350,unit:'table sheet',factor:6),
+    ],0,cash);
+    expect(numVal((await store.stock()).firstWhere((r)=>r['id']==variant)['qty']),156);
+    await store.voidDocument(invoice);
+    expect(numVal((await store.stock()).firstWhere((r)=>r['id']==variant)['qty']),180);
+  });
+
+  test('dynamic sets of 3, 5, 7, 9 and loose packet pieces',()async{
+    final category=await store.addCategory('Sets and Bundles');
+    final product=await store.addProduct(category,'Kitchen Items');
+    for(final size in [3,5,7,9]){
+      final vid=await store.createSimpleVariant(productId:product,packing:'set',
+        packSize:size.toDouble(),openingPacks:1);
+      expect(numVal((await store.stock()).firstWhere((r)=>r['id']==vid)['qty']),size);
+      expect((await store.unitOptions(vid,sale:true)).any((u)=>u['unit']=='set'&&numVal(u['factor'])==size),true);
+    }
+    final packet=await store.createSimpleVariant(productId:product,packing:'packet',packSize:12,openingPacks:2);
+    final units=await store.unitOptions(packet,sale:true);
+    expect(units.any((u)=>u['unit']=='pcs' && numVal(u['factor'])==1),true);
+    expect(units.any((u)=>u['unit']=='packet' && numVal(u['factor'])==12),true);
+    final customer=await store.addParty('customer','Loose Packet Buyer','','');
+    final cash=(await store.read("SELECT id FROM accounts WHERE code='1000'")).first['id'] as int;
+    final sale=await store.postDocument('sale',customer,nowDate(),[
+      ItemLine(packet,7,30,unit:'pcs',factor:1),
+    ],0,cash);
+    expect(numVal((await store.stock()).firstWhere((r)=>r['id']==packet)['qty']),17);
+    await store.voidDocument(sale);
+    expect(numVal((await store.stock()).firstWhere((r)=>r['id']==packet)['qty']),24);
+  });
+
+  test('Table Sheet length must fit the Roll',()async{
+    final category=await store.addCategory('Custom Cuts');
+    final product=await store.addProduct(category,'Cut Roll');
+    expect(() => store.createSimpleVariant(productId:product,packing:'roll',packSize:1,
+      rollGazz:2,tableSheetGazz:5),throwsFormatException);
+  });
+
   test('packet of 12 can be sold loose by piece',()async{
     final category=await store.addCategory('Blankets');
     final product=await store.addProduct(category,'Table Sheet');

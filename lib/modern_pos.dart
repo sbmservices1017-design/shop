@@ -9,7 +9,7 @@ class ModernPosScreen extends StatefulWidget {
   const ModernPosScreen({super.key,required this.kind,required this.onChange,this.onCorrectInvoice});
   @override State<ModernPosScreen> createState()=>_ModernPosScreenState();
 }
-String shopUnit(String unit)=>switch(unit.toLowerCase()){'pcs'=>'Piece','ft'=>'Feet','gazz'=>'Gazz','set'=>'Set','packet'=>'Packet','roll'=>'Roll',_=>unit};
+String shopUnit(String unit)=>switch(unit.toLowerCase()){'pcs'=>'Piece','ft'=>'Feet','gazz'=>'Gazz','set'=>'Set','packet'=>'Packet','roll'=>'Roll','table sheet'=>'Table Sheet',_=>unit};
 
 class _CartRow{
   final Map<String,Object?> product;
@@ -56,28 +56,44 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
     if(row.isNotEmpty){final r=row.first;r.qty.text='${(double.tryParse(r.qty.text)??0)+1}';setState((){});}
     else{
       final newRow=_CartRow(entry);
-      if(!sale){
-        final units=availableUnits[entry['id'] as int]??[];
-        for(final preferred in ['roll','packet','set']){
-          final matching=units.where((u)=>'${u['unit']}'.toLowerCase()==preferred);
-          if(matching.isNotEmpty){newRow.unit='${matching.first['unit']}';newRow.factor.text='${numVal(matching.first['factor'])}';break;}
-        }
+      final units=availableUnits[entry['id'] as int]??[];
+      final preferences=sale?['table sheet']:['roll','packet','set'];
+      for(final preferred in preferences){
+        final matching=units.where((u)=>'${u['unit']}'.toLowerCase()==preferred);
+        if(matching.isNotEmpty){newRow.unit='${matching.first['unit']}';newRow.factor.text='${numVal(matching.first['factor'])}';break;}
       }
       setState(()=>cart.add(newRow));
     }
   }
-  Future<void> chooseVariant(Map<String,Object?> product)async {
+  Future<void> chooseVariant(Map<String,Object?> product) async {
+    // Group by product. The shopkeeper must choose exactly one of its size,
+    // color, quality or cut variations before a cart item is created.
     final options=catalog.where((v)=>v['product_id']==product['product_id']).toList();
+    if(options.isEmpty)return;
     if(options.length==1){add(options.first);return;}
-    final selected=await showDialog<Map<String,Object?>>(context:context,builder:(c)=>AlertDialog(
-      title:Text('Choose Size / Color — ${product['product']}'),
-      content:SizedBox(width:580,height:options.length>7?475:options.length*66.0+25,
-        child:ListView(children:options.map((v)=>ListTile(
-          title:Text('${(v['attrs']??'Standard').toString().isEmpty?'Standard':v['attrs']}'),
-          subtitle:Text('Available: ${v['qty']} ${shopUnit('${v['unit']}')} • ${v['package']??'Single Piece'}'),
-          onTap:()=>Navigator.pop(c,v),trailing:const Icon(Icons.add_circle_outline))).toList())),
-      actions:[TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Cancel'))]));
-    if(selected!=null&&mounted)add(selected);
+    int selectedId=options.first['id'] as int;
+    final choice=await showDialog<Map<String,Object?>>(context:context,
+      builder:(dialogContext)=>StatefulBuilder(builder:(ctx,setModal){
+        final selected=options.firstWhere((v)=>v['id']==selectedId);
+        return AlertDialog(
+          title:Text('Choose Variation — ${product['product']}'),
+          content:SizedBox(width:510,child:Column(mainAxisSize:MainAxisSize.min,children:[
+            DropdownButtonFormField<int>(key:ValueKey(selectedId),initialValue:selectedId,isExpanded:true,
+              decoration:const InputDecoration(labelText:'Size / Color / Design / Pack'),
+              items:options.map((v)=>DropdownMenuItem<int>(value:v['id'] as int,
+                child:Text(('${v['attrs']??''}').trim().isEmpty
+                  ? '${v['package']??'Standard'}'
+                  : '${v['attrs']} · ${v['package']??'Piece'}',overflow:TextOverflow.ellipsis))).toList(),
+              onChanged:(v){if(v!=null)setModal(()=>selectedId=v);}),
+            const SizedBox(height:12),Align(alignment:Alignment.centerLeft,
+              child:Text('Stock: ${numVal(selected['qty']).toStringAsFixed(2)} ${shopUnit('${selected['unit']}')}',
+                style:const TextStyle(fontWeight:FontWeight.w600,color:Color(0xFF1D68B2)))),
+          ])),
+          actions:[TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Cancel')),
+            FilledButton.icon(onPressed:()=>Navigator.pop(dialogContext,selected),
+              icon:const Icon(Icons.add),label:const Text('Add to Cart'))]);
+      }));
+    if(choice!=null&&mounted)add(choice);
   }
   void changeCartUnit(_CartRow row,String unit){
     final choice=(availableUnits[row.product['id'] as int]??[]).firstWhere((u)=>u['unit']==unit);
@@ -125,7 +141,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
   Widget catalogPane(List<Map<String,Object?>> filtered,List<String> categories)=>Card(child:Padding(padding:const EdgeInsets.all(15),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
     TextField(controller:search,onChanged:(_)=>setState((){}),decoration:const InputDecoration(prefixIcon:Icon(Icons.search),labelText:'Search Product / Size / Color')),const SizedBox(height:12),
     SizedBox(height:48,child:ListView(scrollDirection:Axis.horizontal,children:categories.map((c)=>Padding(padding:const EdgeInsets.only(right:8),child:ChoiceChip(label:Text(c),selected:c==category,onSelected:(_)=>setState(()=>category=c)))).toList())),
-    const SizedBox(height:6),Expanded(child:filtered.isEmpty?const Center(child:Text('No matching variations')):ListView.builder(itemCount:filtered.length,itemBuilder:(ctx,i){final p=filtered[i];final qty=numVal(p['qty']);return Card(color:const Color(0xFFF6F8FD),child:ListTile(onTap:()=>chooseVariant(p),title:Text('${p['product']}',style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text('${p['category']} • Choose Size / Color\nStock: $qty ${shopUnit('${p['unit']}')}',style:TextStyle(color:qty<0?Colors.deepOrange:Colors.blueGrey)),isThreeLine:true,trailing:const Icon(Icons.add_circle,color:Color(0xFF4B63D9))));}))
+    const SizedBox(height:6),Expanded(child:filtered.isEmpty?const Center(child:Text('No matching variations')):ListView.builder(itemCount:filtered.length,itemBuilder:(ctx,i){final p=filtered[i];final qty=numVal(p['qty']);return Card(color:const Color(0xFFF6F8FD),child:ListTile(onTap:()=>chooseVariant(p),title:Text('${p['product']}',style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text('${p['category']} • Tap to choose variation\n${catalog.where((v)=>v['product_id']==p['product_id']).length} variations available',style:TextStyle(color:qty<0?Colors.deepOrange:Colors.blueGrey)),isThreeLine:true,trailing:const Icon(Icons.add_circle,color:Color(0xFF4B63D9))));}))
   ])));
   Widget cartPane()=>Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
     Row(children:[Expanded(child:Text('Bill Cart · ${cart.length} SKU',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w800))),Text(paymentLabel,style:TextStyle(fontWeight:FontWeight.w800,fontSize:11,color:paymentLabel=='PAID'?Colors.green:Colors.deepOrange))]),const SizedBox(height:9),

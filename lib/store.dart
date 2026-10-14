@@ -126,12 +126,25 @@ class Store {
     required String packing,
     required double packSize,
     double feetPerGazz=3,
+    double? rollGazz,
+    double? tableSheetGazz,
     double openingPacks=0,
   }) async {
     if(!{'piece','set','packet','roll'}.contains(packing)) {
       throw const FormatException('Choose Piece, Set, Packet or Roll');
     }
-    final factor=packing=='piece'?1.0:packSize;
+    // Stock is always stored in feet for Rolls and pieces for Sets/Packets.
+    // New simple catalog collects Gazz per Roll; older clients can still
+    // supply packSize in Feet to keep existing tests and data compatible.
+    final factor=packing=='roll' && rollGazz!=null
+        ? rollGazz*feetPerGazz : (packing=='piece'?1.0:packSize);
+    if(rollGazz!=null && (packing!='roll' || !rollGazz.isFinite || rollGazz<=0)) {
+      throw const FormatException('Gazz per Roll must be a positive number');
+    }
+    if(tableSheetGazz!=null && (packing!='roll' || !tableSheetGazz.isFinite ||
+      tableSheetGazz<=0 || tableSheetGazz*feetPerGazz>factor)) {
+      throw const FormatException('Table Sheet length must be positive and cannot exceed one Roll');
+    }
     if(!factor.isFinite || factor<=0 || factor>1000000 ||
        !feetPerGazz.isFinite || feetPerGazz<=0 || feetPerGazz>1000000 ||
        !openingPacks.isFinite || openingPacks<0 || openingPacks>100000000 ||
@@ -170,6 +183,10 @@ class Store {
       if(packing=='roll') {
         await t.rawInsert('INSERT INTO variant_units(variant_id,unit,factor,can_buy,can_sell) VALUES(?,?,?,?,?)',
           [vid,'gazz',feetPerGazz,0,1]);
+        if(tableSheetGazz!=null) {
+          await t.rawInsert('INSERT INTO variant_units(variant_id,unit,factor,can_buy,can_sell) VALUES(?,?,?,?,?)',
+            [vid,'table sheet',tableSheetGazz*feetPerGazz,0,1]);
+        }
       }
       final opening=openingPacks*factor;
       if(opening!=0) {

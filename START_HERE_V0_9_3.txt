@@ -1,0 +1,10 @@
+ShopDesk Pro v0.9.3 — Easy Roll / Gazz / Table Sheet / POS Variations
+
+1. This ZIP contains the FULL Flutter source project in ShopDesk/.
+2. Upload ShopDesk/ contents to the root of your GitHub repository.
+3. Run Actions: Build ShopDesk Windows EXE (v0.9.3).
+4. Do not upload any private PEM signing key.
+5. Test from a copied database before replacing a working shop release.
+6. See docs/CLIENT_ROLL_GAZZ_TABLE_SHEET_V0_9_3.md.
+
+Build status: Not compiled/tested with Flutter SDK in this environment.
