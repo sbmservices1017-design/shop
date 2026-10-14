@@ -20,15 +20,23 @@ class _CartRow{
   _CartRow(this.product){unit='${product['unit']}';}
   void dispose(){qty.dispose();price.dispose();factor.dispose();}
 }
+class _ExtraPaymentRow {
+  int? accountId;
+  final amount=TextEditingController(text:'0');
+  _ExtraPaymentRow(this.accountId);
+  void dispose()=>amount.dispose();
+}
+
 class _ModernPosScreenState extends State<ModernPosScreen>{
   final store=Store.instance;
   final search=TextEditingController(),paid=TextEditingController(text:'0'),notes=TextEditingController();
   List<Map<String,Object?>> catalog=[];Map<int,String> parties={};Map<int,String> accounts={};Map<int,List<Map<String,Object?>>> availableUnits={};
   final cart=<_CartRow>[];
+  final extraPayments=<_ExtraPaymentRow>[];
   String category='All',date=nowDate();int? partyId,accountId;bool busy=false;String? error;
   bool get sale=>widget.kind=='sale';
   @override void initState(){super.initState();load();}
-  @override void dispose(){search.dispose();paid.dispose();notes.dispose();for(final row in cart)row.dispose();super.dispose();}
+  @override void dispose(){search.dispose();paid.dispose();notes.dispose();for(final row in cart)row.dispose();for(final row in extraPayments)row.dispose();super.dispose();}
   Future<void> load()async{
     final c=await store.stock();
     final p=await store.read('SELECT id,name FROM parties WHERE kind=? AND active=1 ORDER BY name',[sale?'customer':'supplier']);
@@ -58,7 +66,15 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
     });
   }
   double get total=>cart.fold<double>(0,(v,r)=>v+(double.tryParse(r.qty.text)??0)*(double.tryParse(r.price.text)??0));
-  double get payment=>double.tryParse(paid.text)??0;
+  double get payment=>(double.tryParse(paid.text)??0)+
+    extraPayments.fold<double>(0,(sum,p)=>sum+(double.tryParse(p.amount.text)??0));
+  List<PaymentPart> get enteredPayments=>[
+    if((double.tryParse(paid.text)??0)>0 && accountId!=null)
+      PaymentPart(accountId!,double.parse(paid.text)),
+    for(final row in extraPayments)
+      if((double.tryParse(row.amount.text)??0)>0 && row.accountId!=null)
+        PaymentPart(row.accountId!,double.parse(row.amount.text)),
+  ];
   String get paymentLabel=>payment>=total&&total>0?'PAID':payment>0?'PARTIALLY PAID':'UNPAID';
   void add(Map<String,Object?> entry){
     final row=cart.where((x)=>x.product['id']==entry['id']);
@@ -119,14 +135,24 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
       if(!sale && partyId==null)throw const FormatException('Select a supplier');
       final lines=cart.map((r)=>ItemLine(r.product['id'] as int,double.parse(r.qty.text),double.parse(r.price.text),unit:r.unit,factor:double.parse(r.factor.text))).toList();
       if(lines.any((x)=>x.rate<0||x.qty<=0))throw const FormatException('Quantity must be positive; price cannot be negative');
-      if(payment<0 || payment>total)throw const FormatException('Payment cannot exceed bill total');
-      if(sale && partyId==null && payment<total)throw const FormatException('Select a customer when payment is partially or fully on credit');
-      final id=await store.postDocument(widget.kind,partyId,date,lines,payment,accountId!,notes:notes.text);
+      final amounts=[paid.text,...extraPayments.map((p)=>p.amount.text)];
+      if(amounts.any((text)=>double.tryParse(text)==null ||
+          !double.parse(text).isFinite || double.parse(text)<0))
+        throw const FormatException('Enter valid non-negative payment amounts');
+      if(extraPayments.any((p)=>p.accountId==null))
+        throw const FormatException('Select an account for every payment');
+      if(payment>total+0.001)throw const FormatException('Total payments cannot exceed bill total');
+      if(sale && partyId==null && (total-payment).abs()>0.001)
+        throw const FormatException('Select customer when a balance is unpaid');
+      final id=await store.postDocumentSplit(widget.kind,partyId,date,lines,
+          enteredPayments,notes:notes.text);
       if(!mounted)return;
       final savedStatus=paymentLabel;
       final saved=List<_CartRow>.of(cart);
-      setState((){cart.clear();paid.text='0';notes.clear();error=null;});
+      final oldPayments=List<_ExtraPaymentRow>.of(extraPayments);
+      setState((){cart.clear();extraPayments.clear();paid.text='0';notes.clear();error=null;});
       for(final r in saved)r.dispose();
+      for(final r in oldPayments)r.dispose();
       await load();
       if(!mounted)return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('${sale?'Sale':'Purchase'} #$id saved · stock updated · $savedStatus')));
@@ -169,7 +195,26 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
     DropdownButtonFormField<int?>(value:partyId,isExpanded:true,decoration:InputDecoration(labelText:sale?'Customer':'Supplier'),items:[if(sale)const DropdownMenuItem<int?>(value:null,child:Text('Walk-in (fully paid only)')),...parties.entries.map((e)=>DropdownMenuItem<int?>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis)))],onChanged:(v)=>setState(()=>partyId=v)),const SizedBox(height:8),
     DropdownButtonFormField<int>(value:accountId,isExpanded:true,decoration:const InputDecoration(labelText:'Payment account · Holder · ID'),items:accounts.entries.map((e)=>DropdownMenuItem<int>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis))).toList(),onChanged:(v)=>setState(()=>accountId=v)),const SizedBox(height:8),
     Row(children:[Expanded(child:TextFormField(initialValue:date,decoration:const InputDecoration(labelText:'Invoice date YYYY-MM-DD'),onChanged:(v)=>date=v)),const SizedBox(width:8),Expanded(child:TextField(controller:notes,decoration:const InputDecoration(labelText:'Notes (optional)')))]),const SizedBox(height:8),
-    Row(children:[Expanded(child:TextField(controller:paid,keyboardType:TextInputType.number,decoration:const InputDecoration(labelText:'Paid now (Rs.)'),onChanged:(_)=>setState((){}))),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.end,children:[const Text('Total amount',style:TextStyle(color:Colors.blueGrey,fontSize:11)),Text(money(total),style:const TextStyle(fontWeight:FontWeight.w900,fontSize:20)),Text('Balance: ${money(total-payment)}',style:const TextStyle(fontSize:11))]))]),
+    Row(children:[Expanded(child:TextField(controller:paid,keyboardType:const TextInputType.numberWithOptions(decimal:true),decoration:const InputDecoration(labelText:'First payment (Rs.)'),onChanged:(_)=>setState((){}))),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.end,children:[const Text('Total amount',style:TextStyle(color:Colors.blueGrey,fontSize:11)),Text(money(total),style:const TextStyle(fontWeight:FontWeight.w900,fontSize:20)),Text('Balance: ${money(total-payment)}',style:const TextStyle(fontSize:11))]))]),
+    const SizedBox(height:10),
+    Row(children:[const Expanded(child:Text('Split payment: Cash + Bank + Wallet',style:TextStyle(fontWeight:FontWeight.w700,fontSize:12))),
+      TextButton.icon(onPressed:accounts.isEmpty?null:()=>setState(()=>extraPayments.add(_ExtraPaymentRow(accounts.keys.first))),
+        icon:const Icon(Icons.add,size:18),label:const Text('Add payment method'))]),
+    if(extraPayments.isNotEmpty)SizedBox(height:extraPayments.length>2?132.0:extraPayments.length*66.0,
+      child:ListView.builder(itemCount:extraPayments.length,itemBuilder:(ctx,i){final row=extraPayments[i];return Padding(
+        padding:const EdgeInsets.only(bottom:6),child:Row(children:[
+          Expanded(flex:5,child:DropdownButtonFormField<int>(
+            key:ValueKey('split-account-$i-${row.accountId}'),initialValue:row.accountId,isExpanded:true,
+            decoration:InputDecoration(labelText:'Payment ${i+2} account',isDense:true),
+            items:accounts.entries.map((e)=>DropdownMenuItem<int>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis))).toList(),
+            onChanged:(v)=>setState(()=>row.accountId=v))),
+          const SizedBox(width:7),Expanded(flex:3,child:TextField(controller:row.amount,
+            keyboardType:const TextInputType.numberWithOptions(decimal:true),
+            decoration:const InputDecoration(labelText:'Amount (Rs.)',isDense:true),onChanged:(_)=>setState((){}))),
+          IconButton(tooltip:'Remove payment',onPressed:(){setState(()=>extraPayments.remove(row));row.dispose();},icon:const Icon(Icons.close))
+        ])));})),
+    if(extraPayments.isNotEmpty)Text('Received / Paid: ${money(payment)} · Remaining credit: ${money(total-payment)}',
+      style:const TextStyle(color:Color(0xFF28577F),fontSize:12,fontWeight:FontWeight.w600)),
     if(error!=null)Padding(padding:const EdgeInsets.all(7),child:Text(error!,style:const TextStyle(color:Colors.red,fontSize:12))),const SizedBox(height:9),
     FilledButton.icon(onPressed:busy || CommercialCore.instance.current?.allowed(sale?'Sales / Billing':'Purchases','create')!=true?null:submit,icon:const Icon(Icons.check_circle_outline),label:Padding(padding:const EdgeInsets.all(10),child:Text(busy?'Saving...':sale?'Save Sale & Deduct Stock':'Save Purchase & Add Stock'))),
     const SizedBox(height:4),const Text('Price is entered manually. Stock updates automatically.',style:TextStyle(fontSize:10,color:Colors.blueGrey),textAlign:TextAlign.center)

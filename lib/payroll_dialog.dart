@@ -16,6 +16,7 @@ class PayrollDialog extends StatefulWidget {
 
 class _PayrollDialogState extends State<PayrollDialog> {
   late final TextEditingController _period;
+  late final TextEditingController _salaryDate;
   late final TextEditingController _recovery;
   late final TextEditingController _paid;
   int? _cashAccount;
@@ -28,12 +29,13 @@ class _PayrollDialogState extends State<PayrollDialog> {
     super.initState();
     final today=DateTime.now();
     _period=TextEditingController(text:'${today.year}-${today.month.toString().padLeft(2,'0')}');
+    _salaryDate=TextEditingController(text:nowDate());
     _recovery=TextEditingController(text:'0.00');
     _paid=TextEditingController(text:pkr(widget.quote.gross));
     _cashAccount=widget.cashAccounts.isEmpty?null:widget.cashAccounts.keys.first;
   }
   @override
-  void dispose(){_period.dispose();_recovery.dispose();_paid.dispose();super.dispose();}
+  void dispose(){_period.dispose();_salaryDate.dispose();_recovery.dispose();_paid.dispose();super.dispose();}
 
   int? _parsePaisa(String raw) {
     final n=double.tryParse(raw.trim());
@@ -51,6 +53,11 @@ class _PayrollDialogState extends State<PayrollDialog> {
     if(!RegExp(r'^\d{4}-(0[1-9]|1[0-2])$').hasMatch(_period.text.trim())) {
       return 'Period must be YYYY-MM (example: 2026-10).';
     }
+    final enteredDate=_salaryDate.text.trim();
+    final parsed=DateTime.tryParse(enteredDate);
+    if(!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(enteredDate) || parsed==null ||
+        parsed.toIso8601String().substring(0,10)!=enteredDate)
+      return 'Enter a valid salary payment date YYYY-MM-DD.';
     final r=_recoverAmount,p=_paidAmount;
     if(r==null||p==null)return 'Enter positive or zero recovery and payment amounts.';
     try{widget.quote.salaryDue(r,p);}on FormatException catch(e){return e.message;}
@@ -70,7 +77,7 @@ class _PayrollDialogState extends State<PayrollDialog> {
     setState((){_saving=true;_serverError=null;});
     try {
       await Store.instance.payrollRun(widget.employeeId,_period.text.trim(),
-        _recoverAmount!/100,_paidAmount!/100,_cashAccount!);
+        _recoverAmount!/100,_paidAmount!/100,_cashAccount!,salaryDate:_salaryDate.text.trim());
       if(mounted)Navigator.of(context).pop(true);
     } catch(error){
       if(mounted)setState(()=>_serverError=error is FormatException?error.message:'Could not save payroll: $error');
@@ -107,6 +114,11 @@ class _PayrollDialogState extends State<PayrollDialog> {
         ])),
         const SizedBox(height:16),
         TextField(controller:_period,decoration:const InputDecoration(labelText:'Payroll month (YYYY-MM)'),
+          onChanged:(_)=>setState(()=>_serverError=null)),
+        const SizedBox(height:12),
+        TextField(controller:_salaryDate,decoration:const InputDecoration(
+          labelText:'Salary / payment date (YYYY-MM-DD)',
+          helperText:'Date salary is paid; month and year above remain the payroll period'),
           onChanged:(_)=>setState(()=>_serverError=null)),
         const SizedBox(height:12),
         TextField(controller:_recovery,keyboardType:const TextInputType.numberWithOptions(decimal:true),

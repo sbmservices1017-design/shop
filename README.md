@@ -1,119 +1,29 @@
-# ShopDesk Pro v0.9.5 — Account Holder & Automatic IDs
+# ShopDesk Pro v0.9.6 — Consolidated Client Changes
 
-New payment accounts now request **Account Name**, **Account Holder Name**, and **Cash / Bank / Wallet**. Account IDs are assigned automatically (`PAY-000001`, etc.), displayed in the Accounts list and payment dropdowns across POS and other payment screens. General ledger accounts also receive automatic `GL-000001` codes. Existing account codes and journal-linked IDs are preserved. Existing databases receive a non-destructive `holder_name` column migration.
+Windows Flutter + SQLite single-PC desktop project. Built on v0.9.5; old modules, data and SBM branding remain in source.
 
-**Important:** This is a Flutter source package, not a compiled or verified Windows EXE. Test on a backed-up demo database before use. See `START_HERE_V0_9_5.txt`.
+## Changes
 
----
+- Stock Adjustment: Product → specific Size/Color/Pack variation; stock in canonical Feet/Pieces with signed adjustments, reason required.
+- POS: the existing Roll packing variation supports sale in **Roll, Gazz, Feet**; ready-made Table Sheet Roll supports whole Roll or individual Table Sheets.
+- Payroll: YYYY-MM salary period PLUS independent `YYYY-MM-DD` payment date. Date is saved in payroll, employee ledger, and journal.
+- Sales AND Purchase POS: split payment into multiple Cash/Bank/Wallet rows on the same bill, with independent account ledger lines; remaining amount becomes receivable/payable.
+- Sales AND Purchase invoice list: **Add Installment** payment with a selected payment account and payment date; installments target that exact invoice, not the oldest open bill.
+- No auto-print popup. Manual A4 print remains on the invoice list.
 
-# ShopDesk Pro v0.9.1 — Build fix for Dart constant test arguments
+## Safe accounting behavior
 
-This package is the FULL v0.9.0 Flutter source, with a focused fix for GitHub Actions Static Analyzer errors in `test/store_test.dart`.
-Three tests created `const ItemLine(vid, ...)` using an ID returned by SQLite at runtime. Those are not compile-time constants. Removed only the `const` modifier on lines 45, 48 and 70 (prior numbering).
+All invoice lines, split payments, stock movements, party ledger, and journal lines post **in one SQLite transaction**. Overpayment or invalid account rolls back all operations. Existing single-tender API remains compatible.
 
-**Business logic is unchanged:** existing POS, conversion rules, stock, customer/supplier ledgers, payroll, licensing, branding and accounts are retained.
+**Limitation requiring follow-up:** An invoice created with multiple payment methods cannot currently be corrected using the legacy single-account invoice editor: the editor rejects the edit instead of incorrectly redistributing tender balances. Reverse any later receipts before voiding an invoice. A dedicated multi-tender correction UI needs Windows acceptance testing and implementation before release.
 
-**Validation:** local code difference and ZIP integrity confirmed. Flutter analyzer/tests/Windows EXE must still run in GitHub Actions; this environment has no Flutter SDK.
+## Validation status
 
-# ShopDesk Pro v0.9.0 — Multi-Unit POS & Custom Payment Accounts
+- Flutter/Dart SDK is not available in this execution environment: `flutter analyze`, `flutter test` and Windows `.exe` compilation have **not** been run here.
+- GitHub Actions workflow includes new regression test `test/v0_9_6_shop_changes_test.dart`.
+- Keep the owner PRIVATE key outside GitHub. Always back up the customer `.sqlite` database before upgrading; test with demo data first.
 
-Client change details, unit conversion precautions, data migration and acceptance checklist: `docs/CLIENT_MULTIUNIT_UPGRADE_V0_9.md`.
+## Build
 
-# ShopDesk Pro v0.8.0 — White/Light-Blue UI + Invoice Workflows
+Upload the **contents** of `ShopDesk/` to the repository root (including hidden `.github/`). In GitHub Actions run `Build ShopDesk Windows EXE (v0.9.6)`. Download the whole Windows release ZIP, not EXE alone. The app needs associated Flutter DLL/data files.
 
-**Latest changes:** See `docs/UPGRADE_V0_8_CHECKLIST.md`. All updates are in ONE Flutter source project. It contains the source and GitHub Actions Windows release workflow, **not a precompiled EXE**.
-
-- White/light blue color scheme and more readable typography across screens.
-- Dashboard date-range filters / Clear Filter and live polling.
-- POS moved immediately below Dashboard, dedicated invoice listings and two returns pages.
-- Search invoice number or party name and filter paid / unpaid / partial.
-- Activation dialog by clicking trial countdown.
-- In-place invoice revisions (ID and invoice # preserved) with reversal postings and revision snapshots.
-- Configurable sale/purchase serial numbers in Settings.
-
-**Safety:** Back up your SQLite database and keep the working EXE. Test in a new GitHub branch against a COPY of shop data. The Flutter analyzer, full regression suite and Windows compiler were not available in the packaging environment. GitHub Actions must pass before deploying.
-
-**v0.7.0 Hotfix:** Import the existing `ShopDeskExtendedOperations.verifyDatabase` extension in Settings Hub; prevent the license activation handler from overriding Flutter `State.activate`; remove three unused imports. No schema/data migration introduced. Run GitHub Actions to verify compilation; local Flutter SDK not available.
-
-# ShopDesk Pro v0.7.0 — Integrated Flutter Windows Source
-
-This project preserves the pre-existing inventory/billing/accounts/HR/reporting modules and integrates the user-requested commercial desktop upgrades in one Flutter project and one GitHub Windows build workflow.
-
-## New in v0.7.0
-
-- First application launch: choose **Create New Database** or **Restore Existing Backup**. For an existing ShopDesk SQLite file, this wizard is skipped. Restoration is integrity-checked and performed BEFORE the database is opened.
-- New owner registration with shop details, login on subsequent launches. Login and passwords remain local to SQLite.
-- 48-hour trial starts on initial owner registration, with a persisted local trial marker so a simple DB replacement cannot reset the trial. Dashboard and top bar show a seconds-level remaining countdown. On expiry the app is replaced by the activation screen, including Machine ID and signed activation token input.
-- Signed offline licenses supported by the existing separate private owner generator: 1 month, 1 year, 2 years, lifetime. The client contains only an Ed25519 PUBLIC key.
-- Dashboard: refreshes data from SQLite every 5 seconds with metrics, sales vs purchases trend, stock categories, expense categories, paid/unpaid/partial counts, top products, receivables/payables and recent transactions.
-- Settings contains: Shop Profile, Users & Permissions, Backup & Restore, License Activation, System Information. Shop logo continues to appear in A4 PDF exports.
-- Restore after installation is **staged**, validated and executed before the database opens on the NEXT app launch. An additional rollback copy of the previous database is kept.
-- Existing Sales/Purchase POS, dynamic variants, negative stock, payment updates, customer/supplier ledgers, employee/payroll, and filtered PDF/Excel/A4 reports remain in the project.
-
-## Build ONE Windows release with GitHub
-
-1. BACK UP your existing, working `main` branch and ShopDesk SQLite file first.
-2. Create a new `shopdesk-pro-v0.6` branch. Do not immediately overwrite your working release.
-3. Upload **contents of this ShopDesk folder** to repository root, including hidden `.github/workflows/windows-build.yml`.
-4. GitHub **Actions → Build ShopDesk Windows EXE (v0.7.0) → Run workflow**. Ensure analyzer, Flutter tests and Windows build all pass.
-5. Download the `ShopDesk-Windows-Release` artifact and extract ALL files together (EXE + DLL + data). Compare against your working version on a COPY of your live DB before production usage.
-
-## Owner private key generator
-
-The owner generator is distributed **SEPARATELY** as `ShopDesk_OWNER_PRIVATE_Key_Generator.zip`. It must NEVER be committed to GitHub, delivered to customers or bundled in the Flutter Windows release. The bundled public key and external generator were checked to correspond.
-
-Owner issues a license using (after installing Python `cryptography`):
-
-```powershell
-py generate_license.py MACHINE_ID 1month
-py generate_license.py MACHINE_ID 1year
-py generate_license.py MACHINE_ID 2year
-py generate_license.py MACHINE_ID lifetime
-```
-
-Durations use fixed days (30/365/730), not calendar-month subscription billing.
-
-## Critical limitations and verification state
-
-- Source package creation, Dart-bracket structural scan, SQLite DDL/integrity tests and public/private key correspondence were checked in the preparation environment.
-- **Flutter / Dart analyzer, actual Windows compilation, printing, first-launch wizard on Windows, new license timing UI and complete backup/restore integration tests were NOT executed here** because Flutter SDK / Windows build environment was unavailable. The GitHub Action MUST pass before distributing the EXE.
-- Fully offline licensing is not tamper-proof against administrators able to modify application code, local time or disk state. The local trial marker is an additional guard, NOT invulnerable DRM.
-- Per-module user permissions are primarily UI/enforced workflows; the local database is not encrypted and every direct DB access path has not undergone a production security audit.
-- Profit/COGS, stock costing and some financial closing workflows from earlier versions remain out of production-certification scope. Never use unverified accounting reports to make financial decisions without reconciliation.
-- A specific dashboard reference image was mentioned, but was not available in the provided source material. The dashboard adopts a professional navy/blue analytics layout; exact image/pixel matching requires that image.
-
-## Starting an existing installation
-
-Existing database path and product/account structures are preserved. If `shopdesk.sqlite` already exists in Windows application support, users see the login screen, NOT the first-launch wizard. If the database predates users, the app asks to create its first owner without deleting business data. Back up the original before migrating.
-
-## Upgrade / acceptance scenarios
-
-See `docs/UPGRADE_ACCEPTANCE_V0_6.md` for the feature matrix and hands-on test cases.
-
-
-## NexaDash UI update (v0.7.0)
-
-The source now includes a unified dark navy NexaDash-inspired layout for dashboard, login, owner registration, first-run database selection, and license activation. The left sidebar and dashboard use the supplied reference layout, with real data queried from existing SQLite tables. Sales by Category is based on POSTED sale lines, not invented demo statistics. The license countdown uses the existing 1-second timer; dashboard polls local SQLite every 5 seconds.
-
-Existing POS, stock, purchase, ledger, reporting and payroll business methods have not been rewritten in this UI update. New functional module search filters only assigned modules. As always, Windows Flutter analyzer / test / build must pass on GitHub before installing over a working release.
-
-
-## v0.9.3 — Roll/Gazz and easy POS variations
-- In Add Variation, Roll quantity and Gazz per Roll replace Feet per Roll. App computes Feet with 1 Gazz = 3 Feet.
-- Optional Table Sheet cutting: enter Gazz used per sheet; the POS sells Table Sheets and deducts Feet.
-- Dynamic Set/Packet sizes (3, 5, 7, 9, 12 or custom) and loose Piece sales.
-- Product-first POS variation dropdown shows all size/color/design/cut options.
-- Historical invoice unit factors are snapshotted as before.
-- **Flutter and Windows builds not verified in this environment.** Test on GitHub Actions.
-
-
-## v0.9.4 — Separate Ready-made Table Sheet Roll variation
-- Add Variation → **Table Sheet Roll** is a separate choice from Feet/Gazz Roll.
-- Enter **How many Table Sheets in one Roll?** (default 20), plus quantity of Rolls.
-- One Roll with 20 sheets adds 20 individual Table Sheets to stock.
-- POS purchase defaults to Roll, sale defaults to Table Sheet, optional full Roll sale.
-- POS does not show Gazz/Feet/Pieces for these ready-made sheet variants.
-- Cutting-by-Gazz Roll is still a separate, unchanged unit model.
-- New database columns are not needed: the existing variant_units conversion table stores 1 Roll = N Sheets.
-- Existing Payroll, Accounts, Licensing and SBM branding left unchanged.
-- Flutter SDK unavailable here; GitHub Windows analyzer, tests and build must still run.

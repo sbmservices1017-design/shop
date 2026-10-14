@@ -24,6 +24,8 @@ const schema = <String>[
   '''CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)''',
   '''CREATE TABLE IF NOT EXISTS document_revisions(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES documents(id),changed_at TEXT NOT NULL,old_invoice TEXT NOT NULL,old_date TEXT NOT NULL,old_party_id INTEGER,old_total INTEGER NOT NULL,old_paid INTEGER NOT NULL,old_notes TEXT NOT NULL,old_lines_json TEXT NOT NULL)''',
   '''CREATE TABLE IF NOT EXISTS receipt_allocations(receipt_id INTEGER NOT NULL REFERENCES receipts(id),document_id INTEGER NOT NULL REFERENCES documents(id),amount INTEGER NOT NULL CHECK(amount>0),PRIMARY KEY(receipt_id,document_id))''',
+  '''CREATE TABLE IF NOT EXISTS document_payment_parts(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES documents(id),account_id INTEGER NOT NULL REFERENCES accounts(id),amount INTEGER NOT NULL CHECK(amount>0),active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)))''',
+  '''CREATE INDEX IF NOT EXISTS idx_document_payment_parts ON document_payment_parts(document_id,active)''',
 '''CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, active INTEGER NOT NULL DEFAULT 1)''',
 '''CREATE TABLE IF NOT EXISTS attributes(id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL REFERENCES categories(id), name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'text', choices TEXT NOT NULL DEFAULT '', UNIQUE(category_id,name))''',
 '''CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL REFERENCES categories(id), name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1)''',
@@ -52,6 +54,14 @@ const schema = <String>[
 '''CREATE INDEX IF NOT EXISTS idx_ledger_party ON party_ledger(party_id,date)''',
 '''CREATE INDEX IF NOT EXISTS idx_journal_account ON journal_lines(account_id)'''
 ];
+
+/// One portion of a sale/purchase invoice, paid through one cash/bank/wallet.
+/// Amount is in rupees; persistence converts to integer paisa.
+class PaymentPart {
+  final int accountId;
+  final double amount;
+  const PaymentPart(this.accountId, this.amount);
+}
 
 class ItemLine {
   final int variantId;
@@ -95,6 +105,9 @@ class Store {
     if(!paymentColumns.any((column)=>column['name']=='holder_name')){
       await db.execute("ALTER TABLE payment_accounts ADD COLUMN holder_name TEXT NOT NULL DEFAULT ''");
     }
+    // Existing Roll variants may have been purchase-only. Allow selling a full
+    // Roll as well as Feet/Gazz without changing its stored conversion factor.
+    await db.execute("UPDATE variant_units SET can_sell=1 WHERE lower(unit)='roll' AND can_sell=0");
   }
 
   Future<List<Map<String,Object?>>> read(String sql,[List<Object?> args=const []]) => db.rawQuery(sql,args);
@@ -407,6 +420,25 @@ class Store {
     if(money<0||money>total) throw const FormatException('Paid amount cannot exceed total');
     return db.transaction((t)=>_postDocumentTxn(t,kind,partyId,date,items,paid,paymentAccount,notes));
   }
+  /// Multiple payment methods are saved atomically with the invoice, party ledger,
+  /// stock movements and one balanced journal. Unpaid balance remains on credit.
+  Future<int> postDocumentSplit(String kind,int? partyId,String date,
+      List<ItemLine> items,List<PaymentPart> payments,{String notes=''}) async {
+    if(!{'sale','purchase'}.contains(kind)||items.isEmpty)throw const FormatException('Invalid invoice');
+    if(!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)||DateTime.tryParse(date)==null)
+      throw const FormatException('Enter a valid date YYYY-MM-DD');
+    if(kind=='purchase'&&partyId==null)throw const FormatException('Choose a supplier');
+    if(payments.any((p)=>!p.amount.isFinite || p.amount<=0))
+      throw const FormatException('Payment portions must be positive');
+    final total=items.fold<int>(0,(a,b)=>a+pennies(b.qty*b.rate));
+    final paid=payments.fold<int>(0,(a,b)=>a+pennies(b.amount));
+    if(paid>total)throw const FormatException('Total payments cannot exceed invoice total');
+    if(kind=='sale' && partyId==null && paid!=total)
+      throw const FormatException('Select a customer for any unpaid balance');
+    return db.transaction((t)=>_postDocumentTxn(t,kind,partyId,date,items,
+      paid/100,payments.isEmpty?0:payments.first.accountId,notes,payments:payments));
+  }
+
   /// Atomic invoice numbering. Values are editable by an administrator in Settings.
   /// Separate counters are maintained for sales and purchases.
   Future<String> _reserveInvoiceNumber(Transaction t,String kind) async {
@@ -425,7 +457,7 @@ class Store {
     await t.rawInsert('INSERT OR REPLACE INTO app_settings(key,value) VALUES(?,?)',[nextKey,'$next']);
     return invoice;
   }
-  Future<int> _postDocumentTxn(Transaction t,String kind,int? partyId,String date,List<ItemLine> items,double paid,int paymentAccount,String notes,{int? existingId,String? existingInvoice}) async {
+  Future<int> _postDocumentTxn(Transaction t,String kind,int? partyId,String date,List<ItemLine> items,double paid,int paymentAccount,String notes,{int? existingId,String? existingInvoice,List<PaymentPart>? payments}) async {
     // Preconditions rechecked inside correction transactions as well.
     if(!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)||DateTime.tryParse(date)==null)throw const FormatException('Invalid invoice date');
     if(!{'sale','purchase'}.contains(kind)||items.isEmpty)throw const FormatException('Invalid bill or empty items');
@@ -434,10 +466,15 @@ class Store {
     final checkedTotal=items.fold<int>(0,(a,b)=>a+pennies(b.qty*b.rate));
     final total=checkedTotal; // Invoice total in paisa, computed inside the transaction.
     if(!paid.isFinite) throw const FormatException('Invalid amount paid');
-    final money=pennies(paid);
-    if(money<0||money>total)throw const FormatException('Invalid amount paid');
-    final available=await t.rawQuery('SELECT a.id FROM accounts a JOIN payment_accounts pa ON pa.account_id=a.id WHERE a.id=? AND a.active=1',[paymentAccount]);
-    if(available.isEmpty)throw const FormatException('Choose a valid cash/bank account');
+    final portions=payments??(pennies(paid)>0 ? [PaymentPart(paymentAccount,paid)] : <PaymentPart>[]);
+    if(portions.any((part)=>!part.amount.isFinite || part.amount<=0))
+      throw const FormatException('Enter positive payments only');
+    final money=portions.fold<int>(0,(sum,part)=>sum+pennies(part.amount));
+    if(money<0||money>total)throw const FormatException('Total payment exceeds invoice amount');
+    for(final part in portions){
+      final available=await t.rawQuery('SELECT a.id FROM accounts a JOIN payment_accounts pa ON pa.account_id=a.id WHERE a.id=? AND a.active=1',[part.accountId]);
+      if(available.isEmpty)throw FormatException('Invalid payment account: ${part.accountId}');
+    }
     {
       if(partyId!=null){final p=await t.rawQuery('SELECT kind FROM parties WHERE id=? AND active=1',[partyId]);if(p.isEmpty||p.first['kind']!=(kind=='sale'?'customer':'supplier'))throw const FormatException('Invalid customer/supplier');}
       for(final x in items){
@@ -462,11 +499,15 @@ class Store {
       final int id;
       if(existingId!=null){
         id=existingId;
+        await t.rawUpdate('UPDATE document_payment_parts SET active=0 WHERE document_id=?',[id]);
         await t.rawUpdate("UPDATE documents SET kind=?,invoice=?,party_id=?,date=?,total=?,paid=?,notes=?,status='POSTED' WHERE id=?",[kind,ref,partyId,date,total,money,notes,id]);
         await t.rawDelete('DELETE FROM document_line_units WHERE line_id IN (SELECT id FROM document_lines WHERE document_id=?)',[id]);
         await t.rawDelete('DELETE FROM document_lines WHERE document_id=?',[id]);
       }else{
         id=await t.rawInsert('INSERT INTO documents(kind,invoice,party_id,date,total,paid,notes) VALUES(?,?,?,?,?,?,?)',[kind,ref,partyId,date,total,money,notes]);
+      }
+      for(final part in portions){
+        await t.rawInsert('INSERT INTO document_payment_parts(document_id,account_id,amount) VALUES(?,?,?)',[id,part.accountId,pennies(part.amount)]);
       }
       for(final x in items){final amount=pennies(x.qty*x.rate);
         final lineId=await t.rawInsert('INSERT INTO document_lines(document_id,variant_id,qty,rate,amount) VALUES(?,?,?,?,?)',[id,x.variantId,x.qty,pennies(x.rate),amount]);
@@ -485,10 +526,13 @@ class Store {
         }
       }else if(outstanding>0){throw const FormatException('Credit sale requires customer');}
       final ar=await accountCode(t,'1100');final ap=await accountCode(t,'2000');final inv=await accountCode(t,'1200');final rev=await accountCode(t,'4000');
+      final cashLines=portions.map((p)=>[
+        p.accountId, kind=='sale'?pennies(p.amount):0, kind=='purchase'?pennies(p.amount):0
+      ]).toList();
       if(kind=='sale'){
-        await addJournal(t,kind,id,date,ref,[[paymentAccount,money,0],[ar,outstanding,0],[rev,0,total]]);
+        await addJournal(t,kind,id,date,ref,[...cashLines,[ar,outstanding,0],[rev,0,total]]);
       }else{
-        await addJournal(t,kind,id,date,ref,[[inv,total,0],[paymentAccount,0,money],[ap,0,outstanding]]);
+        await addJournal(t,kind,id,date,ref,[[inv,total,0],...cashLines,[ap,0,outstanding]]);
       }
       await audit(t,'POST',kind,id,ref);
       return id;
@@ -511,6 +555,7 @@ class Store {
     final journals=await t.rawQuery('SELECT id FROM journal WHERE source_type=? AND source_id=?',[kind,id]);
     for(final j in journals){final jl=await t.rawQuery('SELECT account_id,debit,credit FROM journal_lines WHERE journal_id=?',[j['id']]);
       await addJournal(t,'void_$kind',id,date,'Reversal',jl.map((x)=>[x['account_id'] as int,x['credit'] as int,x['debit'] as int]).toList());}
+    await t.rawUpdate('UPDATE document_payment_parts SET active=0 WHERE document_id=?',[id]);
     await audit(t,'VOID',kind,id);
    }
   /// Corrects the SAME invoice ID/number, not a replacement row.
@@ -519,6 +564,9 @@ class Store {
   Future<int> reviseDocument(int oldId,String kind,int? partyId,String date,List<ItemLine> items,double paid,int paymentAccount,{String notes=''}) async => db.transaction((t)async{
     final originals=await t.rawQuery("SELECT * FROM documents WHERE id=? AND status='POSTED'",[oldId]);
     if(originals.isEmpty||originals.first['kind']!=kind)throw const FormatException('Posted invoice not found');
+    final splitRows=await t.rawQuery('SELECT id FROM document_payment_parts WHERE document_id=? AND active=1',[oldId]);
+    if(splitRows.length>1)throw const FormatException(
+      'This invoice has multiple payment methods. Reverse/re-enter payments through the dedicated correction flow; do not overwrite the individual account entries.');
     final original=originals.first;
     final oldLines=await t.rawQuery('SELECT l.variant_id,l.qty,l.rate,l.amount,coalesce(u.unit,v.unit) AS unit,coalesce(u.factor,1) AS factor FROM document_lines l JOIN variants v ON v.id=l.variant_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? ORDER BY l.id',[oldId]);
     final oldReturns=await t.rawQuery('''SELECT 1 FROM return_lines rl JOIN document_lines dl ON dl.id=rl.source_line_id WHERE dl.document_id=? LIMIT 1''',[oldId]);
@@ -563,6 +611,45 @@ class Store {
       await audit(t,'POST','receipt',id);
     });
   }
+  /// Allocate a later installment to the SELECTED invoice, not the oldest
+  /// customer/supplier invoice. Each installment can use a different account.
+  Future<int> recordInvoiceInstallment(int documentId,double amount,int accountId,
+      String note,{String? paymentDate}) async {
+    if(!amount.isFinite || pennies(amount)<=0)
+      throw const FormatException('Payment must be positive');
+    final day=paymentDate??nowDate();
+    if(!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(day)||
+      DateTime.tryParse(day)==null ||
+      DateTime.tryParse(day)!.toIso8601String().substring(0,10)!=day)
+        throw const FormatException('Payment date must be YYYY-MM-DD');
+    final amountPaisa=pennies(amount);
+    return db.transaction((t) async {
+      final docs=await t.rawQuery(
+        "SELECT id,kind,party_id,total,paid FROM documents WHERE id=? AND status='POSTED'",[documentId]);
+      if(docs.isEmpty)throw const FormatException('Active invoice not found');
+      final d=docs.first;
+      final due=(d['total'] as int)-(d['paid'] as int);
+      if(amountPaisa>due)throw FormatException('Payment cannot exceed invoice balance: Rs. ${rupees(due).toStringAsFixed(2)}');
+      final partyId=d['party_id'] as int?;
+      if(partyId==null)throw const FormatException('Walk-in invoices cannot have unpaid balances');
+      final account=await t.rawQuery('SELECT a.id FROM accounts a JOIN payment_accounts p ON p.account_id=a.id WHERE a.id=? AND a.active=1',[accountId]);
+      if(account.isEmpty)throw const FormatException('Select a valid Cash, Bank or Wallet');
+      final kind='${d['kind']}';
+      final receipt=await t.rawInsert('INSERT INTO receipts(party_id,date,amount,account_id,note) VALUES(?,?,?,?,?)',[partyId,day,amountPaisa,accountId,note]);
+      await t.rawInsert('INSERT INTO receipt_allocations(receipt_id,document_id,amount) VALUES(?,?,?)',[receipt,documentId,amountPaisa]);
+      await t.rawUpdate('UPDATE documents SET paid=paid+? WHERE id=?',[amountPaisa,documentId]);
+      await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',[partyId,kind=='purchase'?amountPaisa:0,
+        kind=='sale'?amountPaisa:0,'receipt',receipt,day,note]);
+      final offset=await accountCode(t,kind=='sale'?'1100':'2000');
+      await addJournal(t,'receipt',receipt,day,note,kind=='sale'
+        ? [[accountId,amountPaisa,0],[offset,0,amountPaisa]]
+        : [[offset,amountPaisa,0],[accountId,0,amountPaisa]]);
+      await audit(t,'POST','invoice_installment',receipt,
+          'Invoice $documentId paid through account $accountId');
+      return receipt;
+    });
+  }
+
   Future<void> addExpense(int category,double amount,int account,String description,String date) async {
     final p=pennies(amount);if(!amount.isFinite || p<=0)throw const FormatException('Expense must be positive');
     await db.transaction((t)async{
@@ -581,7 +668,12 @@ class Store {
       await audit(t,'POST','employee_advance',id);
     });
   }
-  Future<int> payrollRun(int employee,String period,double recovery,double payNow,int cashAccount) async => db.transaction((t)async{
+  Future<int> payrollRun(int employee,String period,double recovery,double payNow,int cashAccount,{String? salaryDate}) async => db.transaction((t)async{
+    final effectiveDate=salaryDate??nowDate();
+    if(!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(effectiveDate)||
+        DateTime.tryParse(effectiveDate)==null ||
+        DateTime.tryParse(effectiveDate)!.toIso8601String().substring(0,10)!=effectiveDate)
+      throw const FormatException('Enter a valid payroll date YYYY-MM-DD');
     final rows=await t.rawQuery('SELECT salary FROM employees WHERE id=? AND active=1',[employee]);if(rows.isEmpty)throw const FormatException('Employee not found');
     if(!recovery.isFinite||!payNow.isFinite) {
       throw const FormatException('Recovery and payment amounts must be valid numbers');
@@ -599,11 +691,11 @@ class Store {
     final quote=PayrollQuote(gross,(adv.first['bal'] as num).toInt());
     final net=quote.netPayable(rec);
     quote.salaryDue(rec,pay); // Validates Pay Now against net salary, not gross salary.
-    final id=await t.rawInsert('INSERT INTO payroll(employee_id,period,gross,recovery,net,paid,date) VALUES(?,?,?,?,?,?,?)',[employee,period,gross,rec,net,pay,nowDate()]);
+    final id=await t.rawInsert('INSERT INTO payroll(employee_id,period,gross,recovery,net,paid,date) VALUES(?,?,?,?,?,?,?)',[employee,period,gross,rec,net,pay,effectiveDate]);
     for(final e in <List<Object>>[['SALARY_DUE',gross],['RECOVERY',rec],['SALARY_PAID',pay]]){
-      if((e[1] as int)>0)await t.rawInsert('INSERT INTO employee_ledger(employee_id,date,kind,amount,source_type,source_id,note) VALUES(?,?,?,?,?,?,?)',[employee,nowDate(),e[0],e[1],'payroll',id,period]);
+      if((e[1] as int)>0)await t.rawInsert('INSERT INTO employee_ledger(employee_id,date,kind,amount,source_type,source_id,note) VALUES(?,?,?,?,?,?,?)',[employee,effectiveDate,e[0],e[1],'payroll',id,period]);
     }
-    await addJournal(t,'payroll',id,nowDate(),period,[[await accountCode(t,'6200'),gross,0],[await accountCode(t,'1300'),0,rec],[cashAccount,0,pay],[await accountCode(t,'2100'),0,net-pay]]);
+    await addJournal(t,'payroll',id,effectiveDate,period,[[await accountCode(t,'6200'),gross,0],[await accountCode(t,'1300'),0,rec],[cashAccount,0,pay],[await accountCode(t,'2100'),0,net-pay]]);
     await audit(t,'POST','payroll',id);
     return id;
   });

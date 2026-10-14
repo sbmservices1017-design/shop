@@ -255,16 +255,97 @@ class Dashboard extends StatelessWidget {
   });
 }
 
-class StockScreen extends StatefulWidget{final VoidCallback onChange;const StockScreen({super.key,required this.onChange});@override State<StockScreen> createState()=>_StockScreenState();}
-class _StockScreenState extends State<StockScreen>{final s=Store.instance;
-  Future<void> add()async{try{final vs=await variants(s);if(!mounted)return;final f=await ask(context,'Stock adjustment',[FieldSpec('variant','Product / SKU',choices:vs),const FieldSpec('qty','Quantity change (+ / -)',numeric:true),const FieldSpec('note','Reason')]);
-    if(f!=null){await s.adjustStock(int.parse(f['variant']!),double.parse(f['qty']!),f['note']!);widget.onChange();}
-  }catch(e){if(mounted)await showError(context,e);}}
-  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.stock(),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
-    final all=snap.data!;return pageWrap([section('Live stock balances',action:addButton('Adjust stock',add)),
-      panel(const Text('Negative stock is allowed. Invoice save does not block at zero stock. Purchases increase the same variant stock automatically.',style:TextStyle(color:Colors.blueGrey))),
-      listing(['Product','SKU','Category','Unit','Available','Status'],all.map((v){final qty=numVal(v['qty']);return [txt(v['product']),txt(v['sku']),txt(v['category']),txt(v['unit']),Text('$qty',style:TextStyle(fontWeight:FontWeight.w800,color:qty<0?Colors.red:qty==0?Colors.orange:ink)),Text(qty<0?'NEGATIVE':qty==0?'EMPTY':'IN STOCK',style:TextStyle(color:qty<0?Colors.red:Colors.blueGrey,fontWeight:FontWeight.w700,fontSize:11))];}).toList())]);
+class StockScreen extends StatefulWidget {
+  final VoidCallback onChange;
+  const StockScreen({super.key,required this.onChange});
+  @override State<StockScreen> createState()=>_StockScreenState();
+}
+class _StockScreenState extends State<StockScreen> {
+  final s=Store.instance;
+  Future<void> add() async {
+    try {
+      final all=await s.stock();
+      if(all.isEmpty)throw const FormatException('Add a product variation first.');
+      if(!mounted)return;
+      final adjusted=await showDialog<bool>(context:context,builder:(ctx)=>_StockVariationDialog(items:all));
+      if(adjusted==true)widget.onChange();
+    }catch(e){if(mounted)await showError(context,e);}
+  }
+  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(
+    future:s.stock(),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
+    final all=snap.data!;
+    return pageWrap([section('Live stock balances',action:addButton('Adjust stock',add)),
+      panel(const Text('Select Product → Variation to adjust stock. Negative quantities are allowed. Purchases and sales update the same variant automatically.',style:TextStyle(color:Colors.blueGrey))),
+      listing(['Product','Variation (Size / Color / Pack)','Category','Stock Unit','Available','Status'],
+        all.map((v){final qty=numVal(v['qty']);return [txt(v['product']),
+          txt(('${v['attrs']??''}').trim().isEmpty?'Standard · ${v['package']??'Piece'}':
+          '${v['attrs']} · ${v['package']??'Piece'}'),
+          txt(v['category']),txt(v['display_unit']),
+          Text('$qty',style:TextStyle(fontWeight:FontWeight.w800,color:qty<0?Colors.red:qty==0?Colors.orange:ink)),
+          Text(qty<0?'NEGATIVE':qty==0?'EMPTY':'IN STOCK',style:TextStyle(color:qty<0?Colors.red:Colors.blueGrey,fontWeight:FontWeight.w700,fontSize:11))];}).toList())]);
   });
+}
+
+class _StockVariationDialog extends StatefulWidget {
+  final List<Map<String,Object?>> items;
+  const _StockVariationDialog({required this.items});
+  @override State<_StockVariationDialog> createState()=>_StockVariationDialogState();
+}
+class _StockVariationDialogState extends State<_StockVariationDialog> {
+  late int selectedProduct,selectedVariation;
+  final change=TextEditingController();
+  final reason=TextEditingController();
+  bool saving=false;
+  String? error;
+  @override void initState(){super.initState();
+    selectedProduct=widget.items.first['product_id'] as int;
+    selectedVariation=widget.items.first['id'] as int;
+  }
+  @override void dispose(){change.dispose();reason.dispose();super.dispose();}
+  @override Widget build(BuildContext context){
+    final grouped=<int,String>{for(final x in widget.items)x['product_id'] as int:'${x['product']}'};
+    final options=widget.items.where((x)=>x['product_id']==selectedProduct).toList();
+    final current=options.firstWhere((x)=>x['id']==selectedVariation,orElse:()=>options.first);
+    return AlertDialog(title:const Text('Adjust Product Variation'),content:SizedBox(width:500,
+      child:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
+        DropdownButtonFormField<int>(key:ValueKey('product-$selectedProduct'),initialValue:selectedProduct,
+          isExpanded:true,decoration:const InputDecoration(labelText:'Product'),
+          items:grouped.entries.map((x)=>DropdownMenuItem<int>(value:x.key,child:Text(x.value))).toList(),
+          onChanged:saving?null:(value){if(value!=null)setState((){
+            selectedProduct=value;
+            selectedVariation=widget.items.firstWhere((x)=>x['product_id']==value)['id'] as int;
+          });}),
+        const SizedBox(height:14),
+        DropdownButtonFormField<int>(key:ValueKey('variation-$selectedProduct-$selectedVariation'),
+          initialValue:selectedVariation,isExpanded:true,
+          decoration:const InputDecoration(labelText:'Size / Color / Variation'),
+          items:options.map((x)=>DropdownMenuItem<int>(value:x['id'] as int,
+            child:Text(('${x['attrs']??''}').trim().isNotEmpty ? '${x['attrs']}' : '${x['package']??'Standard'}',
+              overflow:TextOverflow.ellipsis))).toList(),
+          onChanged:saving?null:(value){if(value!=null)setState(()=>selectedVariation=value);}),
+        const SizedBox(height:10),Align(alignment:Alignment.centerLeft,
+          child:Text('Current stock: ${numVal(current['qty']).toStringAsFixed(2)} ${current['display_unit']}',
+            style:const TextStyle(fontWeight:FontWeight.bold,color:Color(0xFF1D68B2)))),
+        const SizedBox(height:12),
+        TextField(controller:change,keyboardType:const TextInputType.numberWithOptions(decimal:true,signed:true),
+          decoration:InputDecoration(labelText:'Change in ${current['display_unit']} (+ or -)',
+            helperText:'Use base stock unit. Example: +20 Pieces or -15 Feet.')),
+        const SizedBox(height:12),
+        TextField(controller:reason,decoration:const InputDecoration(labelText:'Reason / Note')),
+        if(error!=null)Padding(padding:const EdgeInsets.only(top:12),child:Text(error!,style:const TextStyle(color:Colors.red)))
+      ]))),actions:[TextButton(onPressed:saving?null:()=>Navigator.pop(context,false),child:const Text('Cancel')),
+        FilledButton(onPressed:saving?null:()async{
+          final delta=double.tryParse(change.text.trim());
+          if(delta==null||!delta.isFinite||delta==0||reason.text.trim().isEmpty){
+            setState(()=>error='Enter nonzero change and reason.');return;
+          }
+          setState((){saving=true;error=null;});
+          try{await Store.instance.adjustStock(selectedVariation,delta,reason.text.trim());
+            if(context.mounted)Navigator.pop(context,true);
+          }catch(e){if(mounted)setState(()=>error='$e');}
+          finally{if(mounted)setState(()=>saving=false);}
+        },child:const Text('Save Stock Adjustment'))]);
+  }
 }
 
 class DocumentScreen extends StatefulWidget {final String kind;final VoidCallback onChange;const DocumentScreen({super.key,required this.kind,required this.onChange});@override State<DocumentScreen> createState()=>_DocumentScreenState();}
@@ -279,11 +360,47 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
 
   Future<void> create([int? existing]) async {final ok=await showDialog<bool>(context:context,builder:(ctx)=>InvoiceDialog(kind:widget.kind,existingId:existing));if(ok==true)widget.onChange();}
   Future<void> voidIt(int id)async{try{if(await confirm(context,'Void invoice? Stock, balances and journal entries will be reversed.')){await s.voidDocument(id);widget.onChange();}}catch(e){if(mounted)await showError(context,e);}}
+  Future<void> payInvoiceInstallment(Map<String,Object?> invoice)async {
+    try{
+      final accounts=await accountChoices(s);
+      if(accounts.isEmpty)throw const FormatException('Create a payment account first.');
+      if(!mounted)return;
+      final due=rupees(invoice['total'])-rupees(invoice['paid']);
+      if(due<=0)throw const FormatException('Invoice already fully paid.');
+      final f=await ask(context,
+        widget.kind=='sale'?'Receive installment • ${invoice['invoice']}':'Pay installment • ${invoice['invoice']}',[
+        FieldSpec('amount','Installment amount (maximum Rs. ${due.toStringAsFixed(2)})',
+          initial:due.toStringAsFixed(2),numeric:true),
+        FieldSpec('account','Cash / Bank / Wallet',choices:accounts),
+        FieldSpec('date','Payment date YYYY-MM-DD',initial:nowDate()),
+        const FieldSpec('note','Reference / Notes',mustFill:false),
+      ]);
+      if(f==null)return;
+      await s.recordInvoiceInstallment(invoice['id'] as int,double.parse(f['amount']!),
+        int.parse(f['account']!),f['note']!,paymentDate:f['date']!);
+      if(mounted){setState(()=>invoiceFuture=loadInvoices());widget.onChange();}
+    }catch(e){if(mounted)await showError(context,e);}
+  }
   Future<void> previewInvoice(Map<String,Object?> row)async{
     try{final x=await s.read('''SELECT p.name AS Product,v.sku AS SKU,l.qty AS Qty,coalesce(u.unit,v.unit) AS Unit,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=?''',[row['id']]);
       final rpt=ReportResult('Invoice ${row['invoice']}',const ['Product','SKU','Qty','Unit','Rate','Amount'],x.map((r)=>['${r['Product']}','${r['SKU']}','${r['Qty']}','${r['Unit']}','${r['Rate']}','${r['Amount']}']).toList());
+      final onBill=await s.read('''SELECT d.date AS date,a.name AS account,p.amount AS amount
+        FROM document_payment_parts p JOIN documents d ON d.id=p.document_id
+        JOIN accounts a ON a.id=p.account_id WHERE p.document_id=? AND p.active=1
+        ORDER BY p.id''',[row['id']]);
+      final installments=await s.read('''SELECT r.date AS date,a.name AS account,ra.amount AS amount
+        FROM receipt_allocations ra JOIN receipts r ON r.id=ra.receipt_id
+        JOIN accounts a ON a.id=r.account_id
+        WHERE ra.document_id=? ORDER BY r.date,r.id''',[row['id']]);
+      final allPayments=[...onBill,...installments];
       if(!mounted)return;
-      await showDialog(context:context,builder:(ctx)=>AlertDialog(title:Text('${row['invoice']}  |  ${row['party']}'),content:SizedBox(width:640,child:Column(mainAxisSize:MainAxisSize.min,children:[listing(rpt.headings,rpt.rows.map((r)=>r.map((v)=>txt(v)).toList()).toList()),Text('Total: ${funds(row['total'])}     Paid: ${funds(row['paid'])}')])) ,actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close')),OutlinedButton.icon(onPressed:()=>Exports.pdf(rpt),icon:const Icon(Icons.picture_as_pdf),label:const Text('PDF')),FilledButton.icon(onPressed:()=>Exports.pdf(rpt,print:true),icon:const Icon(Icons.print),label:const Text('A4 Print'))]));
+      await showDialog(context:context,builder:(ctx)=>AlertDialog(title:Text('${row['invoice']}  |  ${row['party']}'),content:SizedBox(width:640,child:Column(mainAxisSize:MainAxisSize.min,children:[listing(rpt.headings,rpt.rows.map((r)=>r.map((v)=>txt(v)).toList()).toList()),Text('Total: ${funds(row['total'])}     Paid: ${funds(row['paid'])}'),
+        if(allPayments.isNotEmpty)...[
+          const SizedBox(height:12),const Text('Payments by method',style:TextStyle(fontWeight:FontWeight.w700)),
+          SizedBox(height:160,child:SingleChildScrollView(child:listing(
+            const ['Date','Account','Amount'],allPayments.map((p)=>[
+            txt(p['date']),txt(p['account']),txt(funds(p['amount']))]).toList())))
+        ]])) ,actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close')),OutlinedButton.icon(onPressed:()=>Exports.pdf(rpt),icon:const Icon(Icons.picture_as_pdf),label:const Text('PDF')),FilledButton.icon(onPressed:()=>Exports.pdf(rpt,print:true),icon:const Icon(Icons.print),label:const Text('A4 Print'))]));
     }catch(e){if(mounted)await showError(context,e);}
   }
   @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(
@@ -311,6 +428,8 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
             Text(paymentStatus,style:TextStyle(color:paymentStatus=='Paid'?const Color(0xFF16865B):const Color(0xFFBA651A),fontWeight:FontWeight.w800)),
             txt(r['status']),buttons([
               small('View / Print A4',()=>previewInvoice(r),icon:Icons.print_outlined),
+              if(r['status']=='POSTED'&&paid<total && r['party_id']!=null)
+                small('Add Installment',()=>payInvoiceInstallment(r),icon:Icons.payments_outlined),
               if(r['status']=='POSTED')small('Correct invoice',()=>create(r['id'] as int),icon:Icons.edit_note_outlined),
               if(r['status']=='POSTED')small('Void',()=>voidIt(r['id'] as int),icon:Icons.block)
             ])];

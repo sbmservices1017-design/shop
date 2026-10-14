@@ -1,0 +1,1 @@
+ShopDesk Pro v0.9.6: upload ShopDesk directory contents to GitHub root, run Windows Action, review README. Backup SQLite first.
