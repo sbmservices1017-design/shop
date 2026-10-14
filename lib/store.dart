@@ -38,7 +38,7 @@ const schema = <String>[
 '''CREATE TABLE IF NOT EXISTS document_line_units(line_id INTEGER PRIMARY KEY REFERENCES document_lines(id) ON DELETE CASCADE,unit TEXT NOT NULL,factor REAL NOT NULL CHECK(factor>0))''',
 '''CREATE TABLE IF NOT EXISTS payment_accounts(account_id INTEGER PRIMARY KEY REFERENCES accounts(id),kind TEXT NOT NULL CHECK(kind IN ('cash','bank','wallet')),holder_name TEXT NOT NULL DEFAULT '')''',
 '''CREATE TABLE IF NOT EXISTS stock_movements(id INTEGER PRIMARY KEY,variant_id INTEGER NOT NULL REFERENCES variants(id),qty REAL NOT NULL,source_type TEXT NOT NULL,source_id INTEGER NOT NULL,date TEXT NOT NULL,note TEXT NOT NULL DEFAULT '')''',
-'''CREATE TABLE IF NOT EXISTS party_ledger(id INTEGER PRIMARY KEY,party_id INTEGER NOT NULL REFERENCES parties(id),debit INTEGER NOT NULL DEFAULT 0,credit INTEGER NOT NULL DEFAULT 0,source_type TEXT NOT NULL,source_id INTEGER NOT NULL,date TEXT NOT NULL,note TEXT NOT NULL DEFAULT '')''',
+'''CREATE TABLE IF NOT EXISTS party_ledger(id INTEGER PRIMARY KEY,party_id INTEGER NOT NULL REFERENCES parties(id),debit INTEGER NOT NULL DEFAULT 0,credit INTEGER NOT NULL DEFAULT 0,source_type TEXT NOT NULL,source_id INTEGER NOT NULL,date TEXT NOT NULL,note TEXT NOT NULL DEFAULT '',payment_account_id INTEGER REFERENCES accounts(id))''',
 '''CREATE TABLE IF NOT EXISTS accounts(id INTEGER PRIMARY KEY,code TEXT NOT NULL UNIQUE,name TEXT NOT NULL,type TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1)''',
 '''CREATE TABLE IF NOT EXISTS journal(id INTEGER PRIMARY KEY,date TEXT NOT NULL,source_type TEXT NOT NULL,source_id INTEGER NOT NULL,note TEXT NOT NULL DEFAULT '')''',
 '''CREATE TABLE IF NOT EXISTS journal_lines(id INTEGER PRIMARY KEY,journal_id INTEGER NOT NULL REFERENCES journal(id),account_id INTEGER NOT NULL REFERENCES accounts(id),debit INTEGER NOT NULL DEFAULT 0,credit INTEGER NOT NULL DEFAULT 0)''',
@@ -104,6 +104,12 @@ class Store {
     final paymentColumns=await db.rawQuery('PRAGMA table_info(payment_accounts)');
     if(!paymentColumns.any((column)=>column['name']=='holder_name')){
       await db.execute("ALTER TABLE payment_accounts ADD COLUMN holder_name TEXT NOT NULL DEFAULT ''");
+    }
+    // Payment account reference on each party-ledger row. Existing invoices and
+    // receipts remain intact; older rows use a report-side account lookup.
+    final ledgerColumns=await db.rawQuery('PRAGMA table_info(party_ledger)');
+    if(!ledgerColumns.any((column)=>column['name']=='payment_account_id')){
+      await db.execute('ALTER TABLE party_ledger ADD COLUMN payment_account_id INTEGER REFERENCES accounts(id)');
     }
     // Existing Roll variants may have been purchase-only. Allow selling a full
     // Roll as well as Feet/Gazz without changing its stored conversion factor.
@@ -572,10 +578,10 @@ class Store {
       if(partyId!=null){
         if(kind=='sale'){
           await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',[partyId,total,0,'sale',id,date,ref]);
-          if(money>0)await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',[partyId,0,money,'sale_payment',id,date,ref]);
+          for(final part in portions){await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note,payment_account_id) VALUES(?,?,?,?,?,?,?,?)',[partyId,0,pennies(part.amount),'sale_payment',id,date,ref,part.accountId]);}
         }else{
           await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',[partyId,0,total,'purchase',id,date,ref]);
-          if(money>0)await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',[partyId,money,0,'purchase_payment',id,date,ref]);
+          for(final part in portions){await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note,payment_account_id) VALUES(?,?,?,?,?,?,?,?)',[partyId,pennies(part.amount),0,'purchase_payment',id,date,ref,part.accountId]);}
         }
       }else if(outstanding>0){throw const FormatException('Credit sale requires customer');}
       final ar=await accountCode(t,'1100');final ap=await accountCode(t,'2000');final inv=await accountCode(t,'1200');final rev=await accountCode(t,'4000');
@@ -604,7 +610,7 @@ class Store {
     final lines=await t.rawQuery('SELECT l.*,coalesce(u.factor,1) AS stock_factor FROM document_lines l LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=?',[id]);
     for(final x in lines){await t.rawInsert('INSERT INTO stock_movements(variant_id,qty,source_type,source_id,date,note) VALUES(?,?,?,?,?,?)',[x['variant_id'],numVal(x['qty'])*numVal(x['stock_factor'])*(kind=='sale'?1:-1),'void_$kind',id,date,'Void invoice']);}
     final ledger=await t.rawQuery("SELECT * FROM party_ledger WHERE source_id=? AND source_type IN ('sale','purchase','sale_payment','purchase_payment')",[id]);
-    for(final l in ledger){await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',[l['party_id'],l['credit'],l['debit'],'void_$kind',id,date,'Reversal']);}
+    for(final l in ledger){await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note,payment_account_id) VALUES(?,?,?,?,?,?,?,?)',[l['party_id'],l['credit'],l['debit'],'void_$kind',id,date,'Reversal',l['payment_account_id']]);}
     final journals=await t.rawQuery('SELECT id FROM journal WHERE source_type=? AND source_id=?',[kind,id]);
     for(final j in journals){final jl=await t.rawQuery('SELECT account_id,debit,credit FROM journal_lines WHERE journal_id=?',[j['id']]);
       await addJournal(t,'void_$kind',id,date,'Reversal',jl.map((x)=>[x['account_id'] as int,x['credit'] as int,x['debit'] as int]).toList());}
@@ -658,7 +664,7 @@ class Store {
         await t.rawUpdate('UPDATE documents SET paid=paid+? WHERE id=?',[portion,invoice['id']]);
         remaining-=portion;
       }
-      await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',[partyId,kind=='supplier'?p:0,kind=='customer'?p:0,'receipt',id,nowDate(),note]);
+      await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note,payment_account_id) VALUES(?,?,?,?,?,?,?,?)',[partyId,kind=='supplier'?p:0,kind=='customer'?p:0,'receipt',id,nowDate(),note,accountId]);
       final offset=await accountCode(t,kind=='customer'?'1100':'2000');
       await addJournal(t,'receipt',id,nowDate(),note,kind=='customer'?[[accountId,p,0],[offset,0,p]]:[[offset,p,0],[accountId,0,p]]);
       await audit(t,'POST','receipt',id);
@@ -691,8 +697,8 @@ class Store {
       final receipt=await t.rawInsert('INSERT INTO receipts(party_id,date,amount,account_id,note) VALUES(?,?,?,?,?)',[partyId,day,amountPaisa,accountId,note]);
       await t.rawInsert('INSERT INTO receipt_allocations(receipt_id,document_id,amount) VALUES(?,?,?)',[receipt,documentId,amountPaisa]);
       await t.rawUpdate('UPDATE documents SET paid=paid+? WHERE id=?',[amountPaisa,documentId]);
-      await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',[partyId,kind=='purchase'?amountPaisa:0,
-        kind=='sale'?amountPaisa:0,'receipt',receipt,day,note]);
+      await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note,payment_account_id) VALUES(?,?,?,?,?,?,?,?)',[partyId,kind=='purchase'?amountPaisa:0,
+        kind=='sale'?amountPaisa:0,'receipt',receipt,day,note,accountId]);
       final offset=await accountCode(t,kind=='sale'?'1100':'2000');
       await addJournal(t,'receipt',receipt,day,note,kind=='sale'
         ? [[accountId,amountPaisa,0],[offset,0,amountPaisa]]

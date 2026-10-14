@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
 import 'store.dart';
 import 'reporting.dart';
 import 'commercial_core.dart';
@@ -30,13 +31,15 @@ class _ExtraPaymentRow {
 class _ModernPosScreenState extends State<ModernPosScreen>{
   final store=Store.instance;
   final search=TextEditingController(),paid=TextEditingController(text:'0'),notes=TextEditingController();
+  final cartScroll=ScrollController(),paymentScroll=ScrollController();
+  bool showPaymentDetails=false;
   List<Map<String,Object?>> catalog=[];Map<int,String> parties={};Map<int,String> accounts={};Map<int,List<Map<String,Object?>>> availableUnits={};
   final cart=<_CartRow>[];
   final extraPayments=<_ExtraPaymentRow>[];
   String category='All',date=nowDate();int? partyId,accountId;bool busy=false;String? error;
   bool get sale=>widget.kind=='sale';
   @override void initState(){super.initState();load();}
-  @override void dispose(){search.dispose();paid.dispose();notes.dispose();for(final row in cart)row.dispose();for(final row in extraPayments)row.dispose();super.dispose();}
+  @override void dispose(){search.dispose();paid.dispose();notes.dispose();cartScroll.dispose();paymentScroll.dispose();for(final row in cart)row.dispose();for(final row in extraPayments)row.dispose();super.dispose();}
   Future<void> load()async{
     final c=await store.stock();
     final p=await store.read('SELECT id,name FROM parties WHERE kind=? AND active=1 ORDER BY name',[sale?'customer':'supplier']);
@@ -78,7 +81,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
   String get paymentLabel=>payment>=total&&total>0?'PAID':payment>0?'PARTIALLY PAID':'UNPAID';
   void add(Map<String,Object?> entry){
     final row=cart.where((x)=>x.product['id']==entry['id']);
-    if(row.isNotEmpty){final r=row.first;r.qty.text='${(double.tryParse(r.qty.text)??0)+1}';setState((){});}
+    if(row.isNotEmpty){final r=row.first;r.qty.text='${(double.tryParse(r.qty.text)??0)+1}';setState((){cart.remove(r);cart.insert(0,r);});}
     else{
       final newRow=_CartRow(entry);
       final units=availableUnits[entry['id'] as int]??[];
@@ -87,8 +90,9 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
         final matching=units.where((u)=>'${u['unit']}'.toLowerCase()==preferred);
         if(matching.isNotEmpty){newRow.unit='${matching.first['unit']}';newRow.factor.text='${numVal(matching.first['factor'])}';break;}
       }
-      setState(()=>cart.add(newRow));
+      setState(()=>cart.insert(0,newRow));
     }
+    WidgetsBinding.instance.addPostFrameCallback((_){if(cartScroll.hasClients)cartScroll.jumpTo(0);});
   }
   Future<void> chooseVariant(Map<String,Object?> product) async {
     // Group by product. The shopkeeper must choose exactly one of its size,
@@ -170,7 +174,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
     final displayProducts=grouped.values.toList();
     return LayoutBuilder(builder:(ctx,layout)=>Padding(padding:const EdgeInsets.all(12),child:Column(children:[
       Row(children:[Icon(sale?Icons.point_of_sale:Icons.local_shipping_outlined,color:const Color(0xFF4B63D9),size:26),const SizedBox(width:10),Expanded(child:Text(sale?'Sales POS · Manual Billing':'Purchase POS · Stock In',style:const TextStyle(fontSize:20,fontWeight:FontWeight.w800))),const SizedBox.shrink()]),const SizedBox(height:12),
-      Expanded(child:layout.maxWidth>1000?Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(flex:5,child:catalogPane(displayProducts,cats)),const SizedBox(width:12),Expanded(flex:7,child:cartPane())]):ListView(children:[SizedBox(height:400,child:catalogPane(displayProducts,cats)),const SizedBox(height:12),SizedBox(height:650,child:cartPane())]))
+      Expanded(child:layout.maxWidth>1000?Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(flex:4,child:catalogPane(displayProducts,cats)),const SizedBox(width:12),Expanded(flex:6,child:cartPane())]):ListView(children:[SizedBox(height:400,child:catalogPane(displayProducts,cats)),const SizedBox(height:12),SizedBox(height:650,child:cartPane())]))
     ])));
   }
   Widget catalogPane(List<Map<String,Object?>> filtered,List<String> categories)=>Card(child:Padding(padding:const EdgeInsets.all(15),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
@@ -178,47 +182,148 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
     SizedBox(height:48,child:ListView(scrollDirection:Axis.horizontal,children:categories.map((c)=>Padding(padding:const EdgeInsets.only(right:8),child:ChoiceChip(label:Text(c),selected:c==category,onSelected:(_)=>setState(()=>category=c)))).toList())),
     const SizedBox(height:6),Expanded(child:filtered.isEmpty?const Center(child:Text('No matching variations')):ListView.builder(itemCount:filtered.length,itemBuilder:(ctx,i){final p=filtered[i];final qty=numVal(p['qty']);return Card(color:const Color(0xFFF6F8FD),child:ListTile(onTap:()=>chooseVariant(p),title:Text('${p['product']}',style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text('${p['category']} • Tap to choose variation\n${catalog.where((v)=>v['product_id']==p['product_id']).length} variations available',style:TextStyle(color:qty<0?Colors.deepOrange:Colors.blueGrey)),isThreeLine:true,trailing:FilledButton.icon(onPressed:()=>chooseVariant(p),icon:const Icon(Icons.add_shopping_cart,size:19),label:const Text('Add to Cart'),style:FilledButton.styleFrom(minimumSize:const Size(130,46)))));}))
   ])));
-  Widget cartPane()=>Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-    Row(children:[Expanded(child:Text('Bill Cart · ${cart.length} Items',style:const TextStyle(fontSize:22,fontWeight:FontWeight.w800))),Text(paymentLabel,style:TextStyle(fontWeight:FontWeight.w800,fontSize:11,color:paymentLabel=='PAID'?Colors.green:Colors.deepOrange))]),const SizedBox(height:9),
-    Expanded(child:cart.isEmpty?const Center(child:Text('Select a product from the left')):ListView(children:[for(final row in cart)Card(color:const Color(0xFFF9FAFD),child:Padding(padding:const EdgeInsets.all(9),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-      Row(children:[Expanded(child:Text('${row.product['product']}',style:const TextStyle(fontWeight:FontWeight.bold))),IconButton(onPressed:(){setState(()=>cart.remove(row));row.dispose();},icon:const Icon(Icons.close,size:18))]),
-      Text('Size / Color: ${(row.product['attrs']??'Standard').toString().isEmpty?'Standard':row.product['attrs']}',style:const TextStyle(color:Colors.blueGrey,fontSize:11)),const SizedBox(height:6),
-      DropdownButtonFormField<String>(key:ValueKey('${row.product['id']}-${row.unit}'),initialValue:row.unit,isExpanded:true,
-        decoration:InputDecoration(labelText:sale?'Sell as':'Purchase as'),
-        items:(availableUnits[row.product['id'] as int]??[{'unit':row.unit,'factor':1.0}])
-            .map((u)=>DropdownMenuItem(value:'${u['unit']}',child:Text(shopUnit('${u['unit']}')))).toList(),
-        onChanged:(v){if(v!=null)changeCartUnit(row,v);}),
-      const SizedBox(height:3),Text('Stock: ${(double.tryParse(row.qty.text)??0)*(double.tryParse(row.factor.text)??0)} ${row.product['display_unit']??shopUnit('${row.product['unit']}')}',
-          style:const TextStyle(color:Colors.blueGrey,fontSize:11)),
-      const SizedBox(height:6),Row(children:[Expanded(child:TextField(controller:row.qty,decoration:const InputDecoration(labelText:'Quantity'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){}))),const SizedBox(width:8),Expanded(child:TextField(controller:row.price,decoration:InputDecoration(labelText:'${sale?'Selling':'Purchase'} price per ${shopUnit(row.unit)}'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){})))]),const SizedBox(height:5),Align(alignment:Alignment.centerRight,child:Text(money((double.tryParse(row.qty.text)??0)*(double.tryParse(row.price.text)??0)),style:const TextStyle(fontWeight:FontWeight.bold)))
-    ])))])),const Divider(),
-    DropdownButtonFormField<int?>(value:partyId,isExpanded:true,decoration:InputDecoration(labelText:sale?'Customer':'Supplier'),items:[if(sale)const DropdownMenuItem<int?>(value:null,child:Text('Walk-in (fully paid only)')),...parties.entries.map((e)=>DropdownMenuItem<int?>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis)))],onChanged:(v)=>setState(()=>partyId=v)),const SizedBox(height:8),
-    DropdownButtonFormField<int>(value:accountId,isExpanded:true,decoration:const InputDecoration(labelText:'Payment account · Holder · ID'),items:accounts.entries.map((e)=>DropdownMenuItem<int>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis))).toList(),onChanged:(v)=>setState(()=>accountId=v)),const SizedBox(height:8),
-    Row(children:[Expanded(child:TextFormField(initialValue:date,decoration:const InputDecoration(labelText:'Invoice date YYYY-MM-DD'),onChanged:(v)=>date=v)),const SizedBox(width:8),Expanded(child:TextField(controller:notes,decoration:const InputDecoration(labelText:'Notes (optional)')))]),const SizedBox(height:8),
-    Row(children:[Expanded(child:TextField(controller:paid,keyboardType:const TextInputType.numberWithOptions(decimal:true),decoration:const InputDecoration(labelText:'First payment (Rs.)'),onChanged:(_)=>setState((){}))),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.end,children:[const Text('Total amount',style:TextStyle(color:Colors.blueGrey,fontSize:11)),Text(money(total),style:const TextStyle(fontWeight:FontWeight.w900,fontSize:20)),Text('Balance: ${money(total-payment)}',style:const TextStyle(fontSize:11))]))]),
-    const SizedBox(height:10),
-    Row(children:[const Expanded(child:Text('Split payment: Cash + Bank + Wallet',style:TextStyle(fontWeight:FontWeight.w700,fontSize:12))),
-      TextButton.icon(onPressed:accounts.isEmpty?null:()=>setState(()=>extraPayments.add(_ExtraPaymentRow(accounts.keys.first))),
-        icon:const Icon(Icons.add,size:18),label:const Text('Add payment method'))]),
-    if(extraPayments.isNotEmpty)SizedBox(height:extraPayments.length>2?132.0:extraPayments.length*66.0,
-      child:ListView.builder(itemCount:extraPayments.length,itemBuilder:(ctx,i){final row=extraPayments[i];return Padding(
-        padding:const EdgeInsets.only(bottom:6),child:Row(children:[
-          Expanded(flex:5,child:DropdownButtonFormField<int>(
-            key:ValueKey('split-account-$i-${row.accountId}'),initialValue:row.accountId,isExpanded:true,
-            decoration:InputDecoration(labelText:'Payment ${i+2} account',isDense:true),
-            items:accounts.entries.map((e)=>DropdownMenuItem<int>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis))).toList(),
-            onChanged:(v)=>setState(()=>row.accountId=v))),
-          const SizedBox(width:7),Expanded(flex:3,child:TextField(controller:row.amount,
-            keyboardType:const TextInputType.numberWithOptions(decimal:true),
-            decoration:const InputDecoration(labelText:'Amount (Rs.)',isDense:true),onChanged:(_)=>setState((){}))),
-          IconButton(tooltip:'Remove payment',onPressed:(){setState(()=>extraPayments.remove(row));row.dispose();},icon:const Icon(Icons.close))
-        ]));})),
-    if(extraPayments.isNotEmpty)Text('Received / Paid: ${money(payment)} · Remaining credit: ${money(total-payment)}',
-      style:const TextStyle(color:Color(0xFF28577F),fontSize:12,fontWeight:FontWeight.w600)),
-    if(error!=null)Padding(padding:const EdgeInsets.all(7),child:Text(error!,style:const TextStyle(color:Colors.red,fontSize:12))),const SizedBox(height:9),
-    FilledButton.icon(onPressed:busy || CommercialCore.instance.current?.allowed(sale?'Sales / Billing':'Purchases','create')!=true?null:submit,icon:const Icon(Icons.check_circle_outline),label:Padding(padding:const EdgeInsets.all(10),child:Text(busy?'Saving...':sale?'Save Sale & Deduct Stock':'Save Purchase & Add Stock'))),
-    const SizedBox(height:4),const Text('Price is entered manually. Stock updates automatically.',style:TextStyle(fontSize:10,color:Colors.blueGrey),textAlign:TextAlign.center)
-  ])));
+  // Compact billing grid: new products appear at the TOP without hunting in a
+  // nested scroll view. Dense lines keep 6–10 products visible on a normal
+  // desktop. Beyond available height, a prominent scrollbar is intentional.
+  Widget cartLine(_CartRow row, bool narrow) {
+    final id=row.product['id'];
+    final attrs='${row.product['attrs']??''}'.trim();
+    final variant=attrs.isEmpty?'Standard':attrs;
+    final units=availableUnits[id as int]??[{'unit':row.unit,'factor':1.0}];
+    final product=Column(crossAxisAlignment:CrossAxisAlignment.start,mainAxisAlignment:MainAxisAlignment.center,children:[
+      Text('${row.product['product']}',maxLines:1,overflow:TextOverflow.ellipsis,
+        style:const TextStyle(fontWeight:FontWeight.w700,fontSize:12,color:Color(0xFF172C46))),
+      Text(variant,maxLines:1,overflow:TextOverflow.ellipsis,
+        style:const TextStyle(fontSize:10,color:Color(0xFF58708B))),
+    ]);
+    final unitSelect=DropdownButton<String>(
+      isExpanded:true,isDense:true,value:row.unit,underline:const SizedBox.shrink(),
+      style:const TextStyle(fontSize:11,color:Color(0xFF183454)),
+      items:units.map((u)=>DropdownMenuItem<String>(value:'${u['unit']}',
+        child:Text(shopUnit('${u['unit']}'),overflow:TextOverflow.ellipsis))).toList(),
+      onChanged:(v){if(v!=null)changeCartUnit(row,v);});
+    Widget numberField(TextEditingController controller,String hint) => TextField(
+      controller:controller,keyboardType:const TextInputType.numberWithOptions(decimal:true),
+      textAlign:TextAlign.center,style:const TextStyle(fontSize:12,fontWeight:FontWeight.w600),
+      decoration:InputDecoration(hintText:hint,isDense:true,contentPadding:const EdgeInsets.symmetric(horizontal:6,vertical:9),
+        border:OutlineInputBorder(borderRadius:BorderRadius.circular(7))),
+      onChanged:(_)=>setState((){}));
+    final amount=Text(money((double.tryParse(row.qty.text)??0)*(double.tryParse(row.price.text)??0)),
+      maxLines:1,overflow:TextOverflow.ellipsis,textAlign:TextAlign.end,
+      style:const TextStyle(fontWeight:FontWeight.w800,fontSize:11,color:Color(0xFF134C93)));
+    final remove=IconButton(tooltip:'Remove from cart',visualDensity:VisualDensity.compact,
+      constraints:const BoxConstraints.tightFor(width:30,height:34),padding:EdgeInsets.zero,
+      onPressed:(){setState(()=>cart.remove(row));row.dispose();},
+      icon:const Icon(Icons.close_rounded,size:17,color:Color(0xFFBA3A3A)));
+    return Container(key:ValueKey('compact-cart-$id'),
+      margin:const EdgeInsets.only(bottom:4),padding:const EdgeInsets.symmetric(horizontal:7,vertical:5),
+      decoration:BoxDecoration(color:const Color(0xFFF7FAFF),
+        border:Border.all(color:const Color(0xFFDCE9F8)),borderRadius:BorderRadius.circular(8)),
+      child:narrow
+      ? Column(children:[
+          Row(children:[Expanded(child:product),const SizedBox(width:4),amount,remove]),
+          const SizedBox(height:5),
+          Row(children:[Expanded(flex:4,child:unitSelect),const SizedBox(width:5),
+            Expanded(flex:3,child:numberField(row.qty,'Qty')),const SizedBox(width:5),
+            Expanded(flex:3,child:numberField(row.price,'Price'))]),
+        ])
+      : Row(children:[
+          Expanded(flex:5,child:product),const SizedBox(width:6),
+          Expanded(flex:3,child:unitSelect),const SizedBox(width:6),
+          SizedBox(width:58,child:numberField(row.qty,'Qty')),const SizedBox(width:6),
+          SizedBox(width:78,child:numberField(row.price,'Rate')),const SizedBox(width:6),
+          SizedBox(width:90,child:amount),remove,
+        ]));
+  }
+
+  Widget paymentForm(){
+    return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+      DropdownButtonFormField<int?>(value:partyId,isExpanded:true,
+        decoration:InputDecoration(isDense:true,labelText:sale?'Customer':'Supplier'),
+        items:[if(sale)const DropdownMenuItem<int?>(value:null,child:Text('Walk-in (fully paid only)')),
+          ...parties.entries.map((e)=>DropdownMenuItem<int?>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis)))],
+        onChanged:(v)=>setState(()=>partyId=v)),
+      const SizedBox(height:6),
+      DropdownButtonFormField<int>(value:accountId,isExpanded:true,
+        decoration:const InputDecoration(labelText:'First payment account',isDense:true),
+        items:accounts.entries.map((e)=>DropdownMenuItem<int>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis))).toList(),
+        onChanged:(v)=>setState(()=>accountId=v)),
+      const SizedBox(height:6),
+      Row(children:[Expanded(child:TextField(controller:paid,
+        keyboardType:const TextInputType.numberWithOptions(decimal:true),
+        decoration:const InputDecoration(labelText:'Paid now (Rs.)',isDense:true),onChanged:(_)=>setState((){}))),
+        const SizedBox(width:7),Expanded(child:TextFormField(initialValue:date,
+          decoration:const InputDecoration(labelText:'Date YYYY-MM-DD',isDense:true),onChanged:(v)=>date=v))]),
+      const SizedBox(height:6),
+      TextField(controller:notes,decoration:const InputDecoration(labelText:'Notes (optional)',isDense:true)),
+      Row(children:[const Expanded(child:Text('Split payment • Cash / Bank / Wallet',
+        style:TextStyle(fontWeight:FontWeight.w600,fontSize:11))),
+        TextButton.icon(onPressed:accounts.isEmpty?null:()=>setState(()=>extraPayments.add(_ExtraPaymentRow(accounts.keys.first))),
+          icon:const Icon(Icons.add,size:16),label:const Text('Add method'))]),
+      for(var i=0;i<extraPayments.length;i++) Padding(padding:const EdgeInsets.only(bottom:5),child:Row(children:[
+        Expanded(flex:5,child:DropdownButtonFormField<int>(
+          key:ValueKey('split-account-$i-${extraPayments[i].accountId}'),initialValue:extraPayments[i].accountId,
+          isExpanded:true,decoration:InputDecoration(labelText:'Account ${i+2}',isDense:true),
+          items:accounts.entries.map((e)=>DropdownMenuItem<int>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis))).toList(),
+          onChanged:(v)=>setState(()=>extraPayments[i].accountId=v))),
+        const SizedBox(width:7),Expanded(flex:3,child:TextField(controller:extraPayments[i].amount,
+          keyboardType:const TextInputType.numberWithOptions(decimal:true),
+          decoration:const InputDecoration(labelText:'Amount',isDense:true),onChanged:(_)=>setState((){}))),
+        IconButton(tooltip:'Remove payment',onPressed:(){final row=extraPayments.removeAt(i);setState((){});row.dispose();},
+          icon:const Icon(Icons.close,size:18)),
+      ])),
+    ]);
+  }
+
+  Widget cartPane()=>Card(child:Padding(padding:const EdgeInsets.all(10),child:LayoutBuilder(
+    builder:(ctx,bounds){
+      final narrow=bounds.maxWidth<575;
+      // Keep most of the viewport for the cart instead of allowing payment
+      // widgets to push product lines outside the visible area.
+      final paymentHeight=math.min(236.0,math.max(110.0,bounds.maxHeight*.36));
+      return Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+        Row(children:[Expanded(child:Text('Bill Cart · ${cart.length} Items',
+          style:const TextStyle(fontSize:18,fontWeight:FontWeight.w800))),
+          Text(paymentLabel,style:TextStyle(fontWeight:FontWeight.w800,fontSize:11,
+            color:paymentLabel=='PAID'?Colors.green:Colors.deepOrange))]),
+        const SizedBox(height:5),
+        if(cart.isNotEmpty&&!narrow) const Padding(padding:EdgeInsets.symmetric(horizontal:9,vertical:3),
+          child:Row(children:[Expanded(flex:5,child:Text('Product / Variation',style:TextStyle(fontSize:10,fontWeight:FontWeight.bold))),
+            SizedBox(width:6),Expanded(flex:3,child:Text('Unit',style:TextStyle(fontSize:10,fontWeight:FontWeight.bold))),
+            SizedBox(width:6),SizedBox(width:58,child:Text('Qty',style:TextStyle(fontSize:10,fontWeight:FontWeight.bold))),
+            SizedBox(width:6),SizedBox(width:78,child:Text('Rate',style:TextStyle(fontSize:10,fontWeight:FontWeight.bold))),
+            SizedBox(width:6),SizedBox(width:90,child:Text('Amount',style:TextStyle(fontSize:10,fontWeight:FontWeight.bold))),
+            SizedBox(width:30)])),
+        Expanded(child:cart.isEmpty?const Center(child:Text('Select a product from the left')):
+          Scrollbar(controller:cartScroll,thumbVisibility:true,child:ListView.builder(
+            key:const Key('compact-pos-cart'),controller:cartScroll,
+            padding:const EdgeInsets.only(right:7),itemCount:cart.length,
+            itemBuilder:(ctx,i)=>cartLine(cart[i],narrow)))),
+        const SizedBox(height:5),
+        Container(padding:const EdgeInsets.symmetric(horizontal:7,vertical:5),
+          decoration:BoxDecoration(color:const Color(0xFFEAF4FF),borderRadius:BorderRadius.circular(8)),
+          child:Row(children:[Expanded(child:Text('Total: ${money(total)}',
+            style:const TextStyle(fontSize:16,fontWeight:FontWeight.w800))),
+            Text('Due: ${money(total-payment)}',style:const TextStyle(fontSize:12,fontWeight:FontWeight.w700))])),
+        const SizedBox(height:5),
+        OutlinedButton.icon(onPressed:()=>setState(()=>showPaymentDetails=!showPaymentDetails),
+          icon:Icon(showPaymentDetails?Icons.expand_less:Icons.expand_more,size:16),
+          label:Text(showPaymentDetails?'Hide Payment Details':'Show Payment Details')),
+        if(showPaymentDetails)SizedBox(height:paymentHeight,
+          child:Scrollbar(controller:paymentScroll,thumbVisibility:true,child:SingleChildScrollView(
+            controller:paymentScroll,padding:const EdgeInsets.only(right:6,bottom:4),child:paymentForm()))),
+        if(error!=null)Padding(padding:const EdgeInsets.symmetric(vertical:4),
+          child:Text(error!,maxLines:2,overflow:TextOverflow.ellipsis,
+            style:const TextStyle(color:Colors.red,fontSize:11))),
+        const SizedBox(height:5),
+        FilledButton.icon(onPressed:busy || CommercialCore.instance.current?.allowed(
+          sale?'Sales / Billing':'Purchases','create')!=true?null:submit,
+          icon:const Icon(Icons.check_circle_outline,size:20),
+          label:Text(busy?'Saving...':sale?'Save Sale & Deduct Stock':'Save Purchase & Add Stock'),
+          style:FilledButton.styleFrom(minimumSize:const Size.fromHeight(42))),
+      ]);
+    })));
+
 }
 
 class _HistoryPane extends StatelessWidget {

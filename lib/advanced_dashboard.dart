@@ -43,7 +43,6 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
 
   Future<List<List<Map<String, Object?>>>> load() async {
     final s = Store.instance;
-    final now = DateTime.now();
     final since = DateFormat('yyyy-MM-dd').format(effectiveStart);
     final until = DateFormat('yyyy-MM-dd').format(effectiveEnd);
     return Future.wait([
@@ -63,6 +62,9 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
       s.read("SELECT count(*) n FROM documents WHERE kind='sale' AND date>=? AND date<=? AND status='POSTED'",[since,until]),
       s.read("SELECT c.name name,coalesce(sum(l.amount),0) amount FROM document_lines l JOIN documents d ON d.id=l.document_id JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id JOIN categories c ON c.id=p.category_id WHERE d.kind='sale' AND d.status='POSTED' AND d.date>=? AND d.date<=? GROUP BY c.id ORDER BY amount DESC LIMIT 5",[since,until]),
       s.read("SELECT count(*) n FROM parties WHERE kind='customer'"),
+      // Invoice credit due (gross billed less allocated payments); only POSTED
+      // sales in the chosen date range. Later installments reduce this live.
+      s.read("SELECT coalesce(sum(total-paid),0) n FROM documents WHERE kind='sale' AND status='POSTED' AND date>=? AND date<=?",[since,until]),
     ]);
   }
 
@@ -173,7 +175,7 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
       final purchasePoints=[for(var i=0;i<chartDays;i+=stride)windowSum(purchases,i)];
       return LayoutBuilder(builder:(context,layout){
         final usable=math.max(330.0,layout.maxWidth-44);
-        final count=usable>=1060?4:usable>=600?2:1;
+        final count=usable>=1250?5:usable>=600?2:1;
         final cardWidth=(usable-12*(count-1))/count;
         final wide=usable>=880;
         final big=wide?(usable-14)*0.59:usable;
@@ -195,6 +197,7 @@ class _AdvancedDashboardState extends State<AdvancedDashboard> {
             SizedBox(width:cardWidth,child:statistic('Sales Invoices',number(metric(13)),Icons.shopping_cart_outlined,Nexa.green,'Posted sales')),
             SizedBox(width:cardWidth,child:statistic('Customers',number(metric(15)),Icons.people_alt_outlined,Nexa.purple,'Registered customers')),
             SizedBox(width:cardWidth,child:statistic('Total Purchases',money(metric(1)),Icons.trending_up,Nexa.orange,'Selected period')),
+            SizedBox(width:cardWidth,child:statistic('Customer Credit Due',money(metric(16)),Icons.credit_card_outlined,Nexa.pink,'Unpaid / partial sales in selected period')),
           ]),
           const SizedBox(height:16),
           Wrap(spacing:14,runSpacing:14,children:[

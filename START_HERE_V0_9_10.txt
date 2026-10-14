@@ -1,0 +1,12 @@
+ShopDesk Pro v0.9.10 — Ledger Payment Methods / Compact POS / Customer Credit KPI
+
+1. Back up working Windows version and SQLite database.
+2. Extract the ZIP and upload the CONTENTS of ShopDesk folder to your GitHub repo ROOT, including .github/workflows/windows-build.yml.
+3. Run GitHub Actions > Build ShopDesk Windows EXE (v0.9.10).
+4. Verify flutter analyze, regression tests (including ledger_payment_credit_test.dart) and Windows release build all pass.
+5. Test customer split Cash+Bank invoice, subsequent Wallet installment, reversal, purchase payments and printed ledgers.
+6. Check POS cart with 5, 10, and 20 products, changing size/variation and quantities; it should prioritize items without unnecessary scrolling, and scroll when products exceed the window.
+7. Check dashboard credit card with Date Filter and Clear Filter.
+8. Only then replace client system. Private license PEM must never be uploaded to GitHub.
+
+NOTE: This is source code, not a compiled EXE. Flutter Windows compilation is not available in this environment.

@@ -579,15 +579,30 @@ class _PartiesScreenState extends State<PartiesScreen>{final s=Store.instance;
     FieldSpec('name','Name',initial:'${p?['name']??''}'),FieldSpec('phone','Phone',initial:'${p?['phone']??''}',mustFill:false),FieldSpec('address','Address',initial:'${p?['address']??''}',mustFill:false)]);
     if(f!=null){if(p==null){await s.addParty(widget.kind,f['name']!,f['phone']!,f['address']!);}else{await s.updateParty(p['id'] as int,f['name']!,f['phone']!,f['address']!);}}
   }
-  Future<void> ledger(Map<String,Object?> p)async{
+  Future<void> ledger(Map<String,Object?> p) async {
     final kind=widget.kind=='customer'?'Customer Ledger':'Supplier Ledger';
-    final report=await buildReport(s,ReportFilter(type:kind,start:'2000-01-01',end:'2100-01-01',party:p['id'] as int));
+    final report=await buildReport(s,ReportFilter(type:kind,
+      start:'2000-01-01',end:'2100-01-01',party:p['id'] as int));
     if(!mounted)return;
-    await showDialog(context:context,builder:(ctx)=>AlertDialog(title:Text('${p['name']} • $kind'),content:SizedBox(width:860,height:430,child:SingleChildScrollView(child:listing(report.headings,report.rows.map((r)=>r.map((v)=>txt(v)).toList()).toList()))),actions:[
-      OutlinedButton(onPressed:()=>Exports.excel(report),child:const Text('Excel')),
-      OutlinedButton(onPressed:()=>Exports.pdf(report),child:const Text('PDF')),
-      OutlinedButton(onPressed:()=>Exports.pdf(report,print:true),child:const Text('Print A4')),
-      TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))]));
+    final ledgerHorizontalScroll=ScrollController();
+    try{
+    await showDialog(context:context,builder:(ctx)=>AlertDialog(
+      title:Text('${p['name']} • $kind'),
+      content:SizedBox(width:1000,height:460,
+        child:Scrollbar(controller:ledgerHorizontalScroll,thumbVisibility:true,
+          child:SingleChildScrollView(controller:ledgerHorizontalScroll,scrollDirection:Axis.horizontal,
+            child:SizedBox(width:1330,
+              child:SingleChildScrollView(
+                child:listing(report.headings,report.rows.map((r)=>
+                  r.map((v)=>txt(v)).toList()).toList())))))),
+      actions:[
+        OutlinedButton(onPressed:()=>Exports.excel(report),child:const Text('Excel')),
+        OutlinedButton(onPressed:()=>Exports.pdf(report),child:const Text('PDF')),
+        OutlinedButton(onPressed:()=>Exports.pdf(report,print:true),child:const Text('Print A4')),
+        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close')),
+      ],
+    ));
+    }finally{ledgerHorizontalScroll.dispose();}
   }
   Future<void> opening(Map<String,Object?> p)async{
     final f=await ask(context,'Opening balance • ${p['name']}',[const FieldSpec('amount','Opening amount Rs.',numeric:true),const FieldSpec('note','Reference / Notes',initial:'Opening balance')]);
@@ -596,7 +611,7 @@ class _PartiesScreenState extends State<PartiesScreen>{final s=Store.instance;
   Future<void> payments(Map<String,Object?> p)async{
     final rows=await s.read("SELECT r.*,a.name AS account,coalesce(v.id,0) AS is_void FROM receipts r JOIN accounts a ON a.id=r.account_id LEFT JOIN reversed_transactions v ON v.kind='receipt' AND v.source_id=r.id WHERE r.party_id=? ORDER BY r.id DESC",[p['id']]);
     if(!mounted)return;
-    await showDialog(context:context,builder:(ctx)=>AlertDialog(title:Text('Payments • ${p['name']}'),content:SizedBox(width:680,height:400,child:SingleChildScrollView(child:listing(['Date','Amount','Account','Status','Action'],rows.map((r)=>[txt(r['date']),txt(funds(r['amount'])),txt(r['account']),txt(r['is_void']==0?'POSTED':'VOID'),r['is_void']==0?small('Reverse payment',()async{Navigator.pop(ctx);await change(()async{if(await confirm(context,'Reverse this payment with audit entry?'))await s.voidReceipt(r['id'] as int);});},icon:Icons.undo):txt('—')]).toList()))),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))]));
+    await showDialog(context:context,builder:(ctx)=>AlertDialog(title:Text('Payments • ${p['name']}'),content:SizedBox(width:680,height:400,child:SingleChildScrollView(child:listing(['Date','Amount','Payment Method','Status','Action'],rows.map((r)=>[txt(r['date']),txt(funds(r['amount'])),txt(r['account']),txt(r['is_void']==0?'POSTED':'VOID'),r['is_void']==0?small('Reverse payment',()async{Navigator.pop(ctx);await change(()async{if(await confirm(context,'Reverse this payment with audit entry?'))await s.voidReceipt(r['id'] as int);});},icon:Icons.undo):txt('—')]).toList()))),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))]));
   }
   Future<void> pay(Map<String,Object?> p)async{final accounts=await accountChoices(s);if(!mounted)return;
     final f=await ask(context,widget.kind=='customer'?'Receive customer payment':'Pay supplier',[const FieldSpec('amount','Amount (Rs.)',numeric:true),FieldSpec('account','From / to account',choices:accounts),const FieldSpec('note','Reference / Note',mustFill:false)]);

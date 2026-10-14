@@ -37,3 +37,12 @@ See `FIX_NOTES_V0_9_7.md`. This update repairs one POS split-payment widget synt
 
 ## v0.9.8 payroll UI regression correction
 See `FIX_NOTES_V0_9_8.md`. Updates the stale payroll widget test to target stable keyed fields after the salary-date field addition; payroll calculations and database transactions are unchanged. Build with the v0.9.8 workflow.
+
+## v0.9.10 — Ledger Payment Method, Compact POS, Customer Credit Card
+
+- All customer and supplier ledger rows now include Payment Method. Multiple Cash/Bank/Wallet portions are stored as separate account-linked ledger entries. Installments and reversal rows retain their original payment account reference.
+- Employee, Cash & Bank, and General Account Ledger reports expose a payment-method column; non-cash entries are explicitly identified as such. PDF/Excel exports inherit these headers.
+- POS full-screen billing cart now uses dense invoice-table rows for Product/Variation, Unit, Quantity, Rate and Amount, with new items at the top. Payment details may be opened only when required; excess line items still have a scrollbar.
+- Dashboard includes a live **Customer Credit Due** card, scoped to the selected date range; clear date filter restores rolling 30-day view.
+- SQLite migration retains old data and adds an optional `payment_account_id` field to party_ledger. Existing 0.9.x invoices are not rewritten.
+- Build/test checks now include `test/ledger_payment_credit_test.dart`; Windows SDK build still pending. See `UPGRADE_V0_9_10.md` for details.

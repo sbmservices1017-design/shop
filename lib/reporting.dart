@@ -103,9 +103,25 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
     case 'Supplier Ledger':
       where.add("pa.kind='${f.type=='Customer Ledger'?'customer':'supplier'}'");where.add(dateFilter('l.date'));
       if(f.party!=null){where.add('pa.id=?');args.add(f.party);}
-      sql='''SELECT l.party_id AS PartyId,l.date AS Date,pa.name AS Party,l.source_type AS Source,l.source_id AS Ref,l.debit/100.0 AS Debit,l.credit/100.0 AS Credit,l.note AS Note
-      FROM party_ledger l JOIN parties pa ON pa.id=l.party_id WHERE ${where.join(' AND ')} ORDER BY l.date,l.id''';
-      headers=['Date','Party','Source','Ref','Debit','Credit','Note','Running Balance'];break;
+      sql='''SELECT l.party_id AS PartyId,l.date AS Date,pa.name AS Party,l.source_type AS Source,l.source_id AS Ref,
+        l.debit/100.0 AS Debit,l.credit/100.0 AS Credit,
+        CASE
+          WHEN ac.id IS NOT NULL THEN ac.name || ' (' || ac.code || ')'
+          WHEN l.source_type IN ('sale_payment','purchase_payment','superseded_sale_payment','superseded_purchase_payment') THEN
+            coalesce((SELECT group_concat(DISTINCT a2.name) FROM document_payment_parts dp
+              JOIN accounts a2 ON a2.id=dp.account_id WHERE dp.document_id=l.source_id),
+              'Credit / No payment')
+          WHEN l.source_type IN ('receipt','void_receipt') THEN
+            coalesce((SELECT a2.name || ' (' || a2.code || ')' FROM receipts r
+              JOIN accounts a2 ON a2.id=r.account_id WHERE r.id=l.source_id),'Not recorded')
+          WHEN l.source_type IN ('void_sale','void_purchase') THEN 'Invoice reversal / Non-cash'
+          ELSE 'Credit / Non-cash'
+        END AS "Payment Method",
+        l.note AS Note
+      FROM party_ledger l JOIN parties pa ON pa.id=l.party_id
+      LEFT JOIN accounts ac ON ac.id=l.payment_account_id
+      WHERE ${where.join(' AND ')} ORDER BY l.date,l.id''';
+      headers=['Date','Party','Source','Ref','Debit','Credit','Payment Method','Note','Running Balance'];break;
     case 'Customer Receivables':
     case 'Supplier Payables':
       final kind=f.type=='Customer Receivables'?'customer':'supplier';
@@ -135,8 +151,16 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
     case 'Employee Ledger':
       where.add(dateFilter('l.date'));
       if(f.employee!=null){where.add('e.id=?');args.add(f.employee);}
-      sql='''SELECT l.date AS Date,e.name AS Employee,l.kind AS Type,l.amount/100.0 AS Amount,l.note AS Note FROM employee_ledger l JOIN employees e ON e.id=l.employee_id WHERE ${where.join(' AND ')} ORDER BY l.date,l.id''';
-      headers=['Date','Employee','Type','Amount','Note'];break;
+      sql='''SELECT l.date AS Date,e.name AS Employee,l.kind AS Type,l.amount/100.0 AS Amount,
+        CASE WHEN l.kind IN ('RECOVERY','SALARY_DUE') THEN 'Payroll adjustment / Non-cash'
+        ELSE coalesce((SELECT group_concat(DISTINCT a.name || ' (' || a.code || ')')
+          FROM journal j JOIN journal_lines jl ON jl.journal_id=j.id
+          JOIN payment_accounts pa ON pa.account_id=jl.account_id
+          JOIN accounts a ON a.id=pa.account_id
+          WHERE j.source_type=l.source_type AND j.source_id=l.source_id),'Not recorded')
+        END AS "Payment Method",l.note AS Note
+      FROM employee_ledger l JOIN employees e ON e.id=l.employee_id WHERE ${where.join(' AND ')} ORDER BY l.date,l.id''';
+      headers=['Date','Employee','Type','Amount','Payment Method','Note'];break;
     case 'Payroll':
       where.add(dateFilter('p.date'));
       if(f.employee!=null){where.add('e.id=?');args.add(f.employee);}
@@ -145,9 +169,10 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
       headers=['Date','Employee','Period','Gross','Recovered','Net','Paid','Outstanding'];break;
     case 'Cash & Bank':
       where.add(dateFilter('j.date'));where.add("a.id IN (SELECT account_id FROM payment_accounts)");
-      sql='''SELECT j.date AS Date,a.name AS Account,j.source_type AS Source,j.note AS Description,jl.debit/100.0 AS Debit,jl.credit/100.0 AS Credit
+      sql='''SELECT j.date AS Date,a.name AS Account,j.source_type AS Source,j.note AS Description,jl.debit/100.0 AS Debit,jl.credit/100.0 AS Credit,
+      a.name || ' (' || a.code || ')' AS "Payment Method"
       FROM journal_lines jl JOIN journal j ON j.id=jl.journal_id JOIN accounts a ON a.id=jl.account_id WHERE ${where.join(' AND ')} ORDER BY j.date,j.id''';
-      headers=['Date','Account','Source','Description','Debit','Credit'];break;
+      headers=['Date','Account','Source','Description','Debit','Credit','Payment Method'];break;
     case 'Trial Balance':
       // Cumulative to end date; not only within period.
       args.addAll([f.end,f.end,f.end]);
@@ -187,11 +212,11 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
       where.add(dateFilter('r.date'));
       if(f.party!=null){where.add('r.party_id=?');args.add(f.party);}
       sql='''SELECT r.date AS Date,p.name AS Party,p.kind AS Type,r.amount/100.0 AS Amount,
-        a.name AS Account,r.note AS Note,CASE WHEN rev.id IS NULL THEN 'POSTED' ELSE 'VOID' END AS Status
+        a.name || ' (' || a.code || ')' AS "Payment Method",r.note AS Note,CASE WHEN rev.id IS NULL THEN 'POSTED' ELSE 'VOID' END AS Status
         FROM receipts r JOIN parties p ON p.id=r.party_id JOIN accounts a ON a.id=r.account_id
         LEFT JOIN reversed_transactions rev ON rev.kind='receipt' AND rev.source_id=r.id
         WHERE ${where.join(' AND ')} ORDER BY r.date DESC,r.id DESC''';
-      headers=['Date','Party','Type','Amount','Account','Note','Status'];break;
+      headers=['Date','Party','Type','Amount','Payment Method','Note','Status'];break;
     case 'Salary Outstanding':
       where.add('e.active=1');
       if(f.employee!=null){where.add('e.id=?');args.add(f.employee);}
@@ -204,10 +229,14 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
       where.add(dateFilter('j.date'));
       if(f.search.isNotEmpty){where.add('(a.name LIKE ? OR a.code LIKE ? OR j.note LIKE ?)');args.addAll(List.filled(3,'%${f.search}%'));}
       sql='''SELECT j.date AS Date,a.code AS Code,a.name AS Account,j.source_type AS Type,
-        j.source_id AS Ref,j.note AS Note,jl.debit/100.0 AS Debit,jl.credit/100.0 AS Credit
+        j.source_id AS Ref,j.note AS Note,jl.debit/100.0 AS Debit,jl.credit/100.0 AS Credit,
+        coalesce((SELECT group_concat(DISTINCT a2.name || ' (' || a2.code || ')')
+          FROM journal_lines pl JOIN payment_accounts pac ON pac.account_id=pl.account_id
+          JOIN accounts a2 ON a2.id=pl.account_id WHERE pl.journal_id=j.id),
+          'Non-cash / No payment') AS "Payment Method"
         FROM journal_lines jl JOIN journal j ON j.id=jl.journal_id JOIN accounts a ON a.id=jl.account_id
         WHERE ${where.join(' AND ')} ORDER BY j.date,j.id,jl.id''';
-      headers=['Date','Code','Account','Type','Ref','Note','Debit','Credit'];break;
+      headers=['Date','Code','Account','Type','Ref','Note','Debit','Credit','Payment Method'];break;
     case 'Stock As of Date':
       where.add('m.date<=?');args.add(f.end);
       if(f.category!=null){where.add('c.id=?');args.add(f.category);}
@@ -252,7 +281,7 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
       final name='${r['PartyId']}';
       final debit=pennies(numVal(r['Debit']));final credit=pennies(numVal(r['Credit']));
       balances[name]=(balances[name]??0)+(kind=='customer'?debit-credit:credit-debit);
-      rows.add([...headers.take(7).map((h)=>'${r[h]??''}'),rupees(balances[name]).toStringAsFixed(2)]);
+      rows.add([...headers.take(headers.length-1).map((h)=>'${r[h]??''}'),rupees(balances[name]).toStringAsFixed(2)]);
     }
     return ReportResult(f.type,headers,rows);
   }

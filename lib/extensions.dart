@@ -95,8 +95,8 @@ extension ShopDeskExtendedOperations on Store {
       if(party!=null){
         await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',
           [party,kind=='purchase'?total:0,kind=='sale'?total:0,'${kind}_return',id,date,reason]);
-        if(paid>0)await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',
-          [party,kind=='sale'?paid:0,kind=='purchase'?paid:0,'${kind}_return_refund',id,date,reason]);
+        if(paid>0)await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note,payment_account_id) VALUES(?,?,?,?,?,?,?,?)',
+          [party,kind=='sale'?paid:0,kind=='purchase'?paid:0,'${kind}_return_refund',id,date,reason,account]);
       }
       final receivable=await accountCode(t,'1100');
       final payable=await accountCode(t,'2000');
@@ -129,8 +129,8 @@ extension ShopDeskExtendedOperations on Store {
     final ledgers=await t.rawQuery('SELECT * FROM party_ledger WHERE source_id=? AND source_type IN (?,?)',
       [returnId,'${kind}_return','${kind}_return_refund']);
     for(final l in ledgers){
-      await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',
-        [l['party_id'],l['credit'],l['debit'],'void_${kind}_return',returnId,date,'Return voided']);
+      await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note,payment_account_id) VALUES(?,?,?,?,?,?,?,?)',
+        [l['party_id'],l['credit'],l['debit'],'void_${kind}_return',returnId,date,'Return voided',l['payment_account_id']]);
     }
     await _reverseJournal(t,'${kind}_return',returnId,'Return voided');
     await audit(t,'VOID','return',returnId);
@@ -147,8 +147,8 @@ extension ShopDeskExtendedOperations on Store {
     await t.rawDelete('DELETE FROM receipt_allocations WHERE receipt_id=?',[receiptId]);
     final original=await t.rawQuery("SELECT * FROM party_ledger WHERE source_type='receipt' AND source_id=?",[receiptId]);
     for(final l in original){
-      await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',
-        [l['party_id'],l['credit'],l['debit'],'void_receipt',receiptId,nowDate(),'Payment reversal']);
+      await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note,payment_account_id) VALUES(?,?,?,?,?,?,?,?)',
+        [l['party_id'],l['credit'],l['debit'],'void_receipt',receiptId,nowDate(),'Payment reversal',l['payment_account_id']]);
     }
     await _reverseJournal(t,'receipt',receiptId,'Payment reversal');
     await t.rawInsert('INSERT INTO reversed_transactions(kind,source_id,date) VALUES(?,?,?)',['receipt',receiptId,nowDate()]);

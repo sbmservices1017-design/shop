@@ -1,2 +1,1 @@
-SHOPDESK_SOURCE_0_9_9
-ShopDesk Pro v0.9.9 — Full-screen POS and safe Delete actions
+SHOPDESK_SOURCE_0_9_10_LEDGER_POS_CREDIT
