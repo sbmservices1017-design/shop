@@ -114,6 +114,95 @@ class Store {
     return vid;
   });
 
+  /// Simple shopkeeper workflow. One category -> product -> sellable variation.
+  /// All quantities are stored in canonical loose pieces or feet.
+  /// Purchases/sales choose their pack/unit; invoices snapshot the factor.
+  Future<int> createSimpleVariant({
+    required int productId,
+    String size='',
+    String color='',
+    String design='',
+    String quality='',
+    required String packing,
+    required double packSize,
+    double feetPerGazz=3,
+    double openingPacks=0,
+  }) async {
+    if(!{'piece','set','packet','roll'}.contains(packing)) {
+      throw const FormatException('Choose Piece, Set, Packet or Roll');
+    }
+    final factor=packing=='piece'?1.0:packSize;
+    if(!factor.isFinite || factor<=0 || factor>1000000 ||
+       !feetPerGazz.isFinite || feetPerGazz<=0 || feetPerGazz>1000000 ||
+       !openingPacks.isFinite || openingPacks<0 || openingPacks>100000000 ||
+       ((openingPacks*factor)*1000-(openingPacks*factor*1000).round()).abs()>0.00001) {
+      throw const FormatException('Enter valid pack/roll length and opening stock');
+    }
+    if(packing!='roll' && packing!='piece' && (factor-factor.round()).abs()>0.000001) {
+      throw const FormatException('Pieces per set/packet must be a whole number');
+    }
+    if(packing!='roll' && (openingPacks*factor-(openingPacks*factor).round()).abs()>0.000001) {
+      throw const FormatException('Opening stock in Pieces must be a whole number');
+    }
+    final details=<String,String>{'Size':size.trim(),'Color':color.trim(),
+      'Design':design.trim(),'Quality':quality.trim()};
+    return db.transaction((t) async {
+      final pr=await t.rawQuery('SELECT category_id FROM products WHERE id=? AND active=1',[productId]);
+      if(pr.isEmpty)throw const FormatException('Product not found');
+      final category=pr.first['category_id'] as int;
+      final sku='P${productId}-V${DateTime.now().microsecondsSinceEpoch}';
+      final baseUnit=packing=='roll'?'ft':'pcs';
+      final vid=await t.rawInsert('INSERT INTO variants(product_id,sku,unit) VALUES(?,?,?)',
+        [productId,sku,baseUnit]);
+      for(final entry in details.entries) {
+        if(entry.value.isEmpty)continue;
+        await t.rawInsert('INSERT OR IGNORE INTO attributes(category_id,name,kind,choices) VALUES(?,?,?,?)',
+          [category,entry.key,'text','']);
+        final attr=await t.rawQuery('SELECT id FROM attributes WHERE category_id=? AND name=?',
+          [category,entry.key]);
+        await t.rawInsert('INSERT INTO variant_values(variant_id,attribute_id,value) VALUES(?,?,?)',
+          [vid,attr.first['id'],entry.value]);
+      }
+      if(packing!='piece') {
+        await t.rawInsert('INSERT INTO variant_units(variant_id,unit,factor,can_buy,can_sell) VALUES(?,?,?,?,?)',
+          [vid,packing,factor,1,1]);
+      }
+      if(packing=='roll') {
+        await t.rawInsert('INSERT INTO variant_units(variant_id,unit,factor,can_buy,can_sell) VALUES(?,?,?,?,?)',
+          [vid,'gazz',feetPerGazz,0,1]);
+      }
+      final opening=openingPacks*factor;
+      if(opening!=0) {
+        await t.rawInsert('INSERT INTO stock_movements(variant_id,qty,source_type,source_id,date,note) VALUES(?,?,?,?,?,?)',
+          [vid,opening,'OPENING',vid,nowDate(),'Opening stock in $packing']);
+      }
+      await audit(t,'ADD','variant',vid,'Simple product variation: $packing');
+      return vid;
+    });
+  }
+
+  /// Edit common Size/Color/Design/Quality details without exposing attribute IDs.
+  /// Other legacy category attributes are left intact.
+  Future<void> updateSimpleVariantDetails(int variantId, Map<String,String> details) async => db.transaction((t) async {
+    const names=['Size','Color','Design','Quality'];
+    final existing=await t.rawQuery('''SELECT p.category_id FROM variants v JOIN products p ON p.id=v.product_id
+      WHERE v.id=? AND v.active=1''',[variantId]);
+    if(existing.isEmpty)throw const FormatException('Variation not found');
+    final category=existing.first['category_id'] as int;
+    for(final name in names){
+      final value=(details[name]??'').trim();
+      final known=await t.rawQuery('SELECT id FROM attributes WHERE category_id=? AND name=?',[category,name]);
+      int? attribute=known.isEmpty?null:known.first['id'] as int;
+      if(attribute==null && value.isNotEmpty){
+        attribute=await t.rawInsert('INSERT INTO attributes(category_id,name,kind,choices) VALUES(?,?,?,?)',[category,name,'text','']);
+      }
+      if(attribute==null)continue;
+      await t.rawDelete('DELETE FROM variant_values WHERE variant_id=? AND attribute_id=?',[variantId,attribute]);
+      if(value.isNotEmpty)await t.rawInsert('INSERT INTO variant_values(variant_id,attribute_id,value) VALUES(?,?,?)',[variantId,attribute,value]);
+    }
+    await audit(t,'UPDATE','variant',variantId,'Edited Size/Color/Design/Quality');
+  });
+
   /// Replace a variant's category-defined values atomically. Names/types belong
   /// to the product category; changing one variant cannot mutate another SKU.
   Future<void> updateVariantValues(int variantId,Map<int,String> values) async => db.transaction((t)async{
@@ -140,9 +229,10 @@ class Store {
     await db.rawUpdate('UPDATE $table SET active=0 WHERE id=?',[id]);
   }
   Future<List<Map<String,Object?>>> stock() => read('''SELECT v.id, p.name AS product,c.name AS category,v.sku,v.unit,coalesce(sum(m.qty),0) AS qty,
-    p.id AS product_id,(SELECT group_concat(a.name||': '||vv.value,', ') FROM variant_values vv JOIN attributes a ON a.id=vv.attribute_id WHERE vv.variant_id=v.id) AS attrs
+    p.id AS product_id,(SELECT group_concat(a.name||': '||vv.value,', ') FROM variant_values vv JOIN attributes a ON a.id=vv.attribute_id WHERE vv.variant_id=v.id) AS attrs,
+    (SELECT u.unit||' of '||CAST(u.factor AS TEXT)||' '||v.unit FROM variant_units u WHERE u.variant_id=v.id AND u.unit IN ('set','packet','roll') LIMIT 1) AS package
     FROM variants v JOIN products p ON p.id=v.product_id JOIN categories c ON c.id=p.category_id
-    LEFT JOIN stock_movements m ON m.variant_id=v.id WHERE v.active=1 GROUP BY v.id ORDER BY p.name,v.sku''');
+    LEFT JOIN stock_movements m ON m.variant_id=v.id WHERE v.active=1 AND p.active=1 AND c.active=1 GROUP BY v.id ORDER BY p.name,v.sku''');
   /// A variant has one canonical stock unit (variants.unit).  All purchase/sale
   /// units convert INTO canonical units; a historical invoice snapshots its factor.
   Future<List<Map<String,Object?>>> unitOptions(int variant,{required bool sale}) async {
@@ -239,6 +329,10 @@ class Store {
             JOIN categories c ON c.id=p.category_id WHERE v.id=? AND v.active=1 AND p.active=1 AND c.active=1''',[x.variantId]);
         if(eligible.isEmpty)throw const FormatException('Product variation is archived or missing');
         final stockUnit='${eligible.first['unit']}';
+        // Loose Pieces cannot be sold or purchased in fractions.
+        if(stockUnit.toLowerCase()=='pcs' && (x.qty*x.factor-(x.qty*x.factor).round()).abs()>0.000001) {
+          throw const FormatException('Pieces must be whole numbers. Choose a valid quantity.');
+        }
         final selectedUnit=(x.unit??stockUnit).trim();
         if(selectedUnit.toLowerCase()!=stockUnit.toLowerCase()){
           final conversion=await t.rawQuery('SELECT factor,can_buy,can_sell FROM variant_units WHERE variant_id=? AND unit=?',[x.variantId,selectedUnit]);

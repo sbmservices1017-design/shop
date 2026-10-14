@@ -9,6 +9,8 @@ class ModernPosScreen extends StatefulWidget {
   const ModernPosScreen({super.key,required this.kind,required this.onChange,this.onCorrectInvoice});
   @override State<ModernPosScreen> createState()=>_ModernPosScreenState();
 }
+String shopUnit(String unit)=>switch(unit.toLowerCase()){'pcs'=>'Piece','ft'=>'Feet','gazz'=>'Gazz','set'=>'Set','packet'=>'Packet','roll'=>'Roll',_=>unit};
+
 class _CartRow{
   final Map<String,Object?> product;
   final qty=TextEditingController(text:'1');
@@ -50,19 +52,29 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
   double get payment=>double.tryParse(paid.text)??0;
   String get paymentLabel=>payment>=total&&total>0?'PAID':payment>0?'PARTIALLY PAID':'UNPAID';
   void add(Map<String,Object?> entry){
-    final row=cart.where((x)=>x.product['id']==entry['id'] && x.unit=='${entry['unit']}');
+    final row=cart.where((x)=>x.product['id']==entry['id']);
     if(row.isNotEmpty){final r=row.first;r.qty.text='${(double.tryParse(r.qty.text)??0)+1}';setState((){});}
-    else{setState(()=>cart.add(_CartRow(entry)));}
+    else{
+      final newRow=_CartRow(entry);
+      if(!sale){
+        final units=availableUnits[entry['id'] as int]??[];
+        for(final preferred in ['roll','packet','set']){
+          final matching=units.where((u)=>'${u['unit']}'.toLowerCase()==preferred);
+          if(matching.isNotEmpty){newRow.unit='${matching.first['unit']}';newRow.factor.text='${numVal(matching.first['factor'])}';break;}
+        }
+      }
+      setState(()=>cart.add(newRow));
+    }
   }
   Future<void> chooseVariant(Map<String,Object?> product)async {
     final options=catalog.where((v)=>v['product_id']==product['product_id']).toList();
     if(options.length==1){add(options.first);return;}
     final selected=await showDialog<Map<String,Object?>>(context:context,builder:(c)=>AlertDialog(
-      title:Text('Select size / color / variation — ${product['product']}'),
+      title:Text('Choose Size / Color — ${product['product']}'),
       content:SizedBox(width:580,height:options.length>7?475:options.length*66.0+25,
         child:ListView(children:options.map((v)=>ListTile(
-          title:Text('${v['sku']}   •   ${v['attrs']??'Standard'}'),
-          subtitle:Text('Stock: ${v['qty']} ${v['unit']}'),
+          title:Text('${(v['attrs']??'Standard').toString().isEmpty?'Standard':v['attrs']}'),
+          subtitle:Text('Available: ${v['qty']} ${shopUnit('${v['unit']}')} • ${v['package']??'Single Piece'}'),
           onTap:()=>Navigator.pop(c,v),trailing:const Icon(Icons.add_circle_outline))).toList())),
       actions:[TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Cancel'))]));
     if(selected!=null&&mounted)add(selected);
@@ -111,23 +123,23 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
     ])));
   }
   Widget catalogPane(List<Map<String,Object?>> filtered,List<String> categories)=>Card(child:Padding(padding:const EdgeInsets.all(15),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-    TextField(controller:search,onChanged:(_)=>setState((){}),decoration:const InputDecoration(prefixIcon:Icon(Icons.search),labelText:'Search product, variation, SKU, design')),const SizedBox(height:12),
+    TextField(controller:search,onChanged:(_)=>setState((){}),decoration:const InputDecoration(prefixIcon:Icon(Icons.search),labelText:'Search Product / Size / Color')),const SizedBox(height:12),
     SizedBox(height:48,child:ListView(scrollDirection:Axis.horizontal,children:categories.map((c)=>Padding(padding:const EdgeInsets.only(right:8),child:ChoiceChip(label:Text(c),selected:c==category,onSelected:(_)=>setState(()=>category=c)))).toList())),
-    const SizedBox(height:6),Expanded(child:filtered.isEmpty?const Center(child:Text('No matching variations')):ListView.builder(itemCount:filtered.length,itemBuilder:(ctx,i){final p=filtered[i];final qty=numVal(p['qty']);return Card(color:const Color(0xFFF6F8FD),child:ListTile(onTap:()=>chooseVariant(p),title:Text('${p['product']}',style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text('Select size, color or design • ${p['category']}\nExample variation: ${p['sku']} • stock $qty ${p['unit']}',style:TextStyle(color:qty<0?Colors.deepOrange:Colors.blueGrey)),isThreeLine:true,trailing:const Icon(Icons.add_circle,color:Color(0xFF4B63D9))));}))
+    const SizedBox(height:6),Expanded(child:filtered.isEmpty?const Center(child:Text('No matching variations')):ListView.builder(itemCount:filtered.length,itemBuilder:(ctx,i){final p=filtered[i];final qty=numVal(p['qty']);return Card(color:const Color(0xFFF6F8FD),child:ListTile(onTap:()=>chooseVariant(p),title:Text('${p['product']}',style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text('${p['category']} • Choose Size / Color\nStock: $qty ${shopUnit('${p['unit']}')}',style:TextStyle(color:qty<0?Colors.deepOrange:Colors.blueGrey)),isThreeLine:true,trailing:const Icon(Icons.add_circle,color:Color(0xFF4B63D9))));}))
   ])));
   Widget cartPane()=>Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
     Row(children:[Expanded(child:Text('Bill Cart · ${cart.length} SKU',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w800))),Text(paymentLabel,style:TextStyle(fontWeight:FontWeight.w800,fontSize:11,color:paymentLabel=='PAID'?Colors.green:Colors.deepOrange))]),const SizedBox(height:9),
     Expanded(child:cart.isEmpty?const Center(child:Text('Select a product from the left')):ListView(children:[for(final row in cart)Card(color:const Color(0xFFF9FAFD),child:Padding(padding:const EdgeInsets.all(9),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-      Row(children:[Expanded(child:Text('${row.product['product']} · ${row.product['sku']}',style:const TextStyle(fontWeight:FontWeight.bold))),IconButton(onPressed:(){setState(()=>cart.remove(row));row.dispose();},icon:const Icon(Icons.close,size:18))]),
-      Text('Variation: ${row.product['attrs']??'Standard'}',style:const TextStyle(color:Colors.blueGrey,fontSize:11)),const SizedBox(height:6),
-      Row(children:[Expanded(child:DropdownButtonFormField<String>(key:ValueKey('${row.product['id']}-${row.unit}'),initialValue:row.unit,isExpanded:true,
-        decoration:const InputDecoration(labelText:'Purchase / sale unit'),
-        items:(availableUnits[row.product['id'] as int]??[{'unit':row.unit,'factor':1.0}]).map((u)=>DropdownMenuItem(value:'${u['unit']}',child:Text('${u['unit']}  (×${u['factor']})',overflow:TextOverflow.ellipsis))).toList(),
-        onChanged:(v){if(v!=null)changeCartUnit(row,v);})),
-        if(!sale)...[const SizedBox(width:8),Expanded(child:TextField(controller:row.factor,keyboardType:TextInputType.number,
-          decoration:InputDecoration(labelText:'${row.product['unit']} per ${row.unit}',helperText:'Actual pack / roll size'),onChanged:(_)=>setState((){})))]]),
-      const SizedBox(height:4),Text('Stock impact: ${((double.tryParse(row.qty.text)??0)*(double.tryParse(row.factor.text)??0)).toStringAsFixed(3)} ${row.product['unit']}',style:const TextStyle(color:Colors.blueGrey,fontSize:11)),
-      const SizedBox(height:6),Row(children:[Expanded(child:TextField(controller:row.qty,decoration:const InputDecoration(labelText:'Quantity'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){}))),const SizedBox(width:8),Expanded(child:TextField(controller:row.price,decoration:InputDecoration(labelText:sale?'Manual selling rate':'Purchase rate'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){})))]),const SizedBox(height:5),Align(alignment:Alignment.centerRight,child:Text(money((double.tryParse(row.qty.text)??0)*(double.tryParse(row.price.text)??0)),style:const TextStyle(fontWeight:FontWeight.bold)))
+      Row(children:[Expanded(child:Text('${row.product['product']}',style:const TextStyle(fontWeight:FontWeight.bold))),IconButton(onPressed:(){setState(()=>cart.remove(row));row.dispose();},icon:const Icon(Icons.close,size:18))]),
+      Text('Size / Color: ${(row.product['attrs']??'Standard').toString().isEmpty?'Standard':row.product['attrs']}',style:const TextStyle(color:Colors.blueGrey,fontSize:11)),const SizedBox(height:6),
+      DropdownButtonFormField<String>(key:ValueKey('${row.product['id']}-${row.unit}'),initialValue:row.unit,isExpanded:true,
+        decoration:InputDecoration(labelText:sale?'Sell as':'Purchase as'),
+        items:(availableUnits[row.product['id'] as int]??[{'unit':row.unit,'factor':1.0}])
+            .map((u)=>DropdownMenuItem(value:'${u['unit']}',child:Text(shopUnit('${u['unit']}')))).toList(),
+        onChanged:(v){if(v!=null)changeCartUnit(row,v);}),
+      const SizedBox(height:3),Text('Stock: ${(double.tryParse(row.qty.text)??0)*(double.tryParse(row.factor.text)??0)} ${shopUnit('${row.product['unit']}')}',
+          style:const TextStyle(color:Colors.blueGrey,fontSize:11)),
+      const SizedBox(height:6),Row(children:[Expanded(child:TextField(controller:row.qty,decoration:const InputDecoration(labelText:'Quantity'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){}))),const SizedBox(width:8),Expanded(child:TextField(controller:row.price,decoration:InputDecoration(labelText:'${sale?'Selling':'Purchase'} price per ${shopUnit(row.unit)}'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){})))]),const SizedBox(height:5),Align(alignment:Alignment.centerRight,child:Text(money((double.tryParse(row.qty.text)??0)*(double.tryParse(row.price.text)??0)),style:const TextStyle(fontWeight:FontWeight.bold)))
     ])))])),const Divider(),
     DropdownButtonFormField<int?>(value:partyId,isExpanded:true,decoration:InputDecoration(labelText:sale?'Customer':'Supplier'),items:[if(sale)const DropdownMenuItem<int?>(value:null,child:Text('Walk-in (fully paid only)')),...parties.entries.map((e)=>DropdownMenuItem<int?>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis)))],onChanged:(v)=>setState(()=>partyId=v)),const SizedBox(height:8),
     DropdownButtonFormField<int>(value:accountId,decoration:const InputDecoration(labelText:'Payment account'),items:accounts.entries.map((e)=>DropdownMenuItem<int>(value:e.key,child:Text(e.value))).toList(),onChanged:(v)=>setState(()=>accountId=v)),const SizedBox(height:8),
@@ -135,7 +147,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
     Row(children:[Expanded(child:TextField(controller:paid,keyboardType:TextInputType.number,decoration:const InputDecoration(labelText:'Paid now (Rs.)'),onChanged:(_)=>setState((){}))),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.end,children:[const Text('Total amount',style:TextStyle(color:Colors.blueGrey,fontSize:11)),Text(money(total),style:const TextStyle(fontWeight:FontWeight.w900,fontSize:20)),Text('Balance: ${money(total-payment)}',style:const TextStyle(fontSize:11))]))]),
     if(error!=null)Padding(padding:const EdgeInsets.all(7),child:Text(error!,style:const TextStyle(color:Colors.red,fontSize:12))),const SizedBox(height:9),
     FilledButton.icon(onPressed:busy || CommercialCore.instance.current?.allowed(sale?'Sales / Billing':'Purchases','create')!=true?null:submit,icon:const Icon(Icons.check_circle_outline),label:Padding(padding:const EdgeInsets.all(10),child:Text(busy?'Saving...':sale?'Save Sale & Deduct Stock':'Save Purchase & Add Stock'))),
-    const SizedBox(height:4),const Text('Negative stock allowed. Rate is entered manually for every bill.',style:TextStyle(fontSize:10,color:Colors.blueGrey),textAlign:TextAlign.center)
+    const SizedBox(height:4),const Text('Price is entered manually. Stock updates automatically.',style:TextStyle(fontSize:10,color:Colors.blueGrey),textAlign:TextAlign.center)
   ])));
 }
 

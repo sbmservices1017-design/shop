@@ -8,6 +8,7 @@ import 'reporting.dart';
 import 'commercial_core.dart';
 import 'commercial_ui.dart';
 import 'modern_pos.dart';
+import 'simple_catalog.dart';
 import 'advanced_dashboard.dart';
 import 'boot_setup.dart';
 import 'settings_hub.dart';
@@ -89,8 +90,8 @@ class _ShellState extends State<Shell> {
     (label:'Sale Returns',icon:Icons.assignment_return_outlined),
     (label:'Purchase Invoices',icon:Icons.shopping_cart_outlined),
     (label:'Purchase Returns',icon:Icons.keyboard_return_outlined),
-    (label:'Products & Variants',icon:Icons.inventory_2_outlined),
-    (label:'Categories & Fields',icon:Icons.category_outlined),
+    (label:'Products & Variations',icon:Icons.inventory_2_outlined),
+    (label:'Categories',icon:Icons.category_outlined),
     (label:'Stock & Adjustments',icon:Icons.warehouse_outlined),
     (label:'Customers',icon:Icons.people_outline),
     (label:'Suppliers',icon:Icons.local_shipping_outlined),
@@ -102,6 +103,7 @@ class _ShellState extends State<Shell> {
   ];
   String moduleKey(int i)=>switch(i){
     1||2=>'Sales / Billing',3||5=>'Returns & Refunds',4=>'Purchases',
+    6=>'Products & Variants',7=>'Categories & Fields',
     _=>menu[i].label
   };
   void refresh(){if(mounted)setState(()=>revision++);}
@@ -116,7 +118,7 @@ class _ShellState extends State<Shell> {
     3=>ReturnScreen(kind:'sale',onChange:refresh),
     4=>DocumentScreen(kind:'purchase',onChange:refresh),
     5=>ReturnScreen(kind:'purchase',onChange:refresh),
-    6=>ProductsScreen(onChange:refresh),7=>CategoriesScreen(onChange:refresh),
+    6=>SimpleProductsScreen(onChange:refresh),7=>SimpleCategoriesScreen(onChange:refresh),
     8=>StockScreen(onChange:refresh),9=>PartiesScreen(kind:'customer',onChange:refresh),
     10=>PartiesScreen(kind:'supplier',onChange:refresh),
     11=>ExpenseScreen(onChange:refresh),12=>EmployeeScreen(onChange:refresh),
@@ -250,79 +252,6 @@ class Dashboard extends StatelessWidget {
         Icon(c.$3,color:blue),const SizedBox(height:12),Text(c.$1,style:const TextStyle(color:Colors.blueGrey,fontSize:12)),const SizedBox(height:7),Text(c.$2,style:const TextStyle(fontWeight:FontWeight.w800,color:ink,fontSize:20))]))))).toList()),
       const SizedBox(height:25),section('Recent transactions'),listing(['Date','Invoice','Type','Party','Total'],recent.map((r)=>[txt(r['date']),txt(r['invoice']),txt(r['kind']),txt(r['party']),txt(funds(r['total']))]).toList()),
       const Padding(padding:EdgeInsets.only(top:10),child:Text('Note: Profit is not finalized until inventory costing / COGS is implemented.',style:TextStyle(fontSize:12,color:Colors.blueGrey)))]);
-  });
-}
-
-class CategoriesScreen extends StatefulWidget {final VoidCallback onChange;const CategoriesScreen({super.key,required this.onChange});@override State<CategoriesScreen> createState()=>_CategoriesScreenState();}
-class _CategoriesScreenState extends State<CategoriesScreen>{final s=Store.instance;int? selected;
-  Future<void> run(Future<void> Function() fn)async{try{await fn();widget.onChange();}catch(e){if(mounted)await showError(context,e);}}
-  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read('SELECT * FROM categories WHERE active=1 ORDER BY name'),builder:(ctx,c){if(!c.hasData)return const Center(child:CircularProgressIndicator());
-    final cats=c.data!;selected ??=cats.isEmpty?null:cats.first['id'] as int;
-    return pageWrap([section('Categories',action:addButton('New category',()=>run(()async{final f=await ask(context,'Add category',[const FieldSpec('name','Name')]);if(f!=null)await s.addCategory(f['name']!);}))),
-      listing(['Category','Actions'],cats.map((x)=>[txt(x['name']),buttons([small('Edit',()=>run(()async{final f=await ask(context,'Rename category',[FieldSpec('name','Name',initial:'${x['name']}')]);if(f!=null)await s.db.rawUpdate('UPDATE categories SET name=? WHERE id=?',[f['name'],x['id']]);})),small('Archive',()=>run(()async{if(await confirm(context,'Archive this category?'))await s.archive('categories',x['id'] as int);}),icon:Icons.archive_outlined)])]).toList()),
-      const SizedBox(height:12),section('Category-specific product fields',action:addButton('Add field',()=>run(()async{
-        final f=await ask(context,'Define dynamic field',[FieldSpec('cat','Category',choices:{for(final x in cats)x['id'] as int:'${x['name']}'}),const FieldSpec('name','Field name'),const FieldSpec('kind','Type (text / number / choice)',initial:'text'),const FieldSpec('choices','Choices separated by |',mustFill:false)]);
-        if(f!=null){if(!{'text','number','choice'}.contains(f['kind']))throw const FormatException('Type must be text, number or choice');await s.addAttribute(int.parse(f['cat']!),f['name']!,f['kind']!,f['choices']!);}
-      }))),FutureBuilder<List<Map<String,Object?>>>(future:s.read('SELECT a.id,a.name,a.kind,a.choices,c.name AS category FROM attributes a JOIN categories c ON c.id=a.category_id ORDER BY c.name,a.name'),builder:(ctx,a)=>a.hasData?listing(['Category','Field','Type','Choices','Action'],a.data!.map((x)=>[txt(x['category']),txt(x['name']),txt(x['kind']),txt(x['choices']),small('Edit',()=>run(()async{
-        final f=await ask(context,'Edit field',[FieldSpec('name','Name',initial:'${x['name']}'),FieldSpec('kind','Type',initial:'${x['kind']}'),FieldSpec('choices','Choices',initial:'${x['choices']}',mustFill:false)]);if(f!=null)await s.db.rawUpdate('UPDATE attributes SET name=?,kind=?,choices=? WHERE id=?',[f['name'],f['kind'],f['choices'],x['id']]);}))]).toList()):const LinearProgressIndicator())]);
-  });
-}
-
-class ProductsScreen extends StatefulWidget {final VoidCallback onChange;const ProductsScreen({super.key,required this.onChange});@override State<ProductsScreen> createState()=>_ProductsScreenState();}
-class _ProductsScreenState extends State<ProductsScreen>{final s=Store.instance;
-  Future<void> change(Future<void> Function() fn) async{try{await fn();widget.onChange();}catch(e){if(mounted)await showError(context,e);}}
-  Future<void> addVariant(int? preselect)async{
-    final products=await s.read('SELECT id,name,category_id FROM products WHERE active=1 ORDER BY name');if(products.isEmpty)throw const FormatException('Create a product first');
-    if(!mounted)return;
-    final f=await ask(context,'New stock variation',[FieldSpec('product','Product',initial:preselect==null?'':'$preselect',choices:{for(final x in products)x['id'] as int:'${x['name']}'}),const FieldSpec('sku','SKU / Barcode'),const FieldSpec('unit','Unit (pcs / meter / roll / ft)',initial:'pcs'),const FieldSpec('opening','Opening stock',initial:'0',numeric:true)]);
-    if(f==null)return;
-    final product=int.parse(f['product']!);final cat=products.firstWhere((p)=>p['id']==product)['category_id'];
-    final attrs=await s.read('SELECT * FROM attributes WHERE category_id=? ORDER BY name',[cat]);
-    final values=<int,String>{};
-    if(attrs.isNotEmpty&&mounted){
-      final custom=await ask(context,'Set variation attributes',attrs.map((a)=>FieldSpec('${a['id']}','${a['name']} (${a['kind']})',mustFill:false)).toList());
-      if(custom==null)return;
-      for(final x in custom.entries){if(x.value.isNotEmpty)values[int.parse(x.key)]=x.value;}
-    }
-    await s.addVariant(product,f['sku']!,f['unit']!,values,double.parse(f['opening']!));
-  }
-  @override Widget build(BuildContext context)=>FutureBuilder<List<Object>>(future:Future.wait([s.read('SELECT p.*,c.name AS category FROM products p JOIN categories c ON c.id=p.category_id WHERE p.active=1 ORDER BY p.name'),s.stock()]),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
-    final products=snap.data![0] as List<Map<String,Object?>>;final stock=snap.data![1] as List<Map<String,Object?>>;
-    return pageWrap([section('Product catalog',action:buttons([addButton('Add product',()=>change(()async{final cats=await options(s,'SELECT id,name FROM categories WHERE active=1 ORDER BY name');if(cats.isEmpty)throw const FormatException('Create category first');if(!mounted)return;final f=await ask(context,'Add product',[FieldSpec('category','Category',choices:cats),const FieldSpec('name','Product name')]);if(f!=null)await s.addProduct(int.parse(f['category']!),f['name']!);})),
-      addButton('Add variation',()=>change(()=>addVariant(null)))])),
-      listing(['Product','Category','Manage'],products.map((p)=>[txt(p['name']),txt(p['category']),buttons([
-        small('Add variation',()=>change(()=>addVariant(p['id'] as int)),icon:Icons.add_circle_outline),
-        small('Rename',()=>change(()async{final f=await ask(context,'Rename product',[FieldSpec('name','Name',initial:'${p['name']}')]);if(f!=null)await s.db.rawUpdate('UPDATE products SET name=? WHERE id=?',[f['name'],p['id']]);})),
-        small('Archive',()=>change(()async{if(await confirm(context,'Archive product? Existing transactions remain.'))await s.archive('products',p['id'] as int);}),icon:Icons.archive_outlined)])]).toList()),
-      const SizedBox(height:15),section('Variants & stock'),listing(['SKU','Product','Attributes','Unit','Stock','Actions'],stock.map((v)=>[txt(v['sku']),txt(v['product']),SizedBox(width:220,child:txt(v['attrs'])),txt(v['unit']),Text('${v['qty']}',style:TextStyle(fontWeight:FontWeight.bold,color:numVal(v['qty'])<0?Colors.red:ink)),buttons([
-        small('Edit attributes',()=>change(()async{
-          final id=v['id'] as int;
-          final attrs=await s.read('''SELECT a.id,a.name,a.kind,a.choices,coalesce(vv.value,'') AS val
-            FROM variants vr JOIN products p ON p.id=vr.product_id
-            JOIN attributes a ON a.category_id=p.category_id
-            LEFT JOIN variant_values vv ON vv.attribute_id=a.id AND vv.variant_id=vr.id
-            WHERE vr.id=? ORDER BY a.name''',[id]);
-          if(attrs.isEmpty)throw const FormatException('This category has no custom fields');
-          if(!mounted)return;
-          final vals=await ask(context,'Edit variation fields',attrs.map((a)=>FieldSpec('${a['id']}','${a['name']} • ${a['kind']}${a['kind']=='choice'?' • ${a['choices']}':''}',initial:'${a['val']}',mustFill:false,numeric:a['kind']=='number')).toList());
-          if(vals!=null)await s.updateVariantValues(id,{for(final e in vals.entries)int.parse(e.key):e.value});
-        }),icon:Icons.tune_outlined),
-        small('Purchase / Sale Units',()=>change(()async{
-          final f=await ask(context,'Configure Unit Conversion: ${v['sku']}',[
-            const FieldSpec('unit','Unit (roll / packet / feet / gazz)'),
-            FieldSpec('factor','How many ${v['unit']} per 1 selected unit',numeric:true),
-            FieldSpec('buy','Allow buying in this unit?',choices:const {1:'Yes',0:'No'}),
-            FieldSpec('sell','Allow selling in this unit?',choices:const {1:'Yes',0:'No'})]);
-          if(f!=null)await s.setVariantUnit(v['id'] as int,f['unit']!,double.parse(f['factor']!),canBuy:f['buy']=='1',canSell:f['sell']=='1');
-        }),icon:Icons.straighten_outlined),
-        small('Edit SKU/unit',()=>change(()async{final f=await ask(context,'Edit variant',[FieldSpec('sku','SKU',initial:'${v['sku']}'),FieldSpec('unit','Unit',initial:'${v['unit']}')]);if(f!=null){
-            if('${f['unit']}'.toLowerCase()!='${v['unit']}'.toLowerCase()){
-              final movement=await s.read('SELECT 1 FROM stock_movements WHERE variant_id=? LIMIT 1',[v['id']]);
-              if(movement.isNotEmpty)throw const FormatException('Cannot change base stock unit after inventory transactions. Create a new variant or perform a reviewed inventory migration.');
-            }
-            await s.db.rawUpdate('UPDATE variants SET sku=?,unit=? WHERE id=?',[f['sku'],f['unit'],v['id']]);
-          }})),
-        small('Archive',()=>change(()async{if(await confirm(context,'Archive variant?'))await s.archive('variants',v['id'] as int);}),icon:Icons.archive_outlined)])]).toList())]);
   });
 }
 

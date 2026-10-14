@@ -1,0 +1,29 @@
+SHOPDESK PRO v0.9.2 — SIMPLE CATEGORY / PRODUCT / VARIATION / POS
+
+1. This is a FULL Flutter source project, not a compiled EXE.
+2. Upload the CONTENTS of this ShopDesk folder to your GitHub repository root.
+3. Commit all files, including .github/workflows/windows-build.yml.
+4. Actions -> Build ShopDesk Windows EXE (v0.9.2) -> Run workflow.
+5. Check Static analyzer and ShopDesk regression tests (including simple_catalog_test.dart).
+6. If green, download the complete Windows release ZIP from Actions Artifacts.
+
+HOW CLIENT USES IT
+A) Categories -> Add Category.
+B) Products & Variations -> New Product -> Add Size / Variation.
+C) Choose Piece, Set, Packet, Roll. Enter pack quantity (3 pieces / 12 pieces / 100 feet).
+D) POS -> choose product / variation / Sell As or Purchase As / Qty / manual price -> Save.
+E) Opening stock and sales/purchases use a common canonical stock quantity.
+
+EXAMPLES
+Set of 3 = 3 pieces, buy sets and sell loose pieces.
+Packet of 12 = 12 pieces, buy packets and sell loose pieces.
+Roll of 100 feet, buy rolls and sell in Feet or Gazz; feet-per-gazz configurable per variant.
+
+IMPORTANT
+* Does NOT delete demo databases automatically. Backup before you deliberately create fresh demo data.
+* Does NOT reset 48-hour trial/license by resetting shop records.
+* Existing shop/accounting, payroll, license, reports, SBM branding preserved.
+* Windows EXE compilation has NOT been verified in this environment.
+* Owner PRIVATE license key is not included in this GitHub-safe source package.
+
+Read docs/SIMPLE_SHOP_FLOW_V0_9_2.md for details.
