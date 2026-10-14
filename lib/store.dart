@@ -24,6 +24,9 @@ const schema = <String>[
 '''CREATE TABLE IF NOT EXISTS parties(id INTEGER PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('customer','supplier')),name TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',address TEXT NOT NULL DEFAULT '',active INTEGER NOT NULL DEFAULT 1)''',
 '''CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('sale','purchase')),invoice TEXT NOT NULL UNIQUE,party_id INTEGER REFERENCES parties(id),date TEXT NOT NULL,total INTEGER NOT NULL DEFAULT 0,paid INTEGER NOT NULL DEFAULT 0,notes TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'POSTED' CHECK(status IN ('POSTED','VOID')))''',
 '''CREATE TABLE IF NOT EXISTS document_lines(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES documents(id),variant_id INTEGER NOT NULL REFERENCES variants(id),qty REAL NOT NULL CHECK(qty>0),rate INTEGER NOT NULL CHECK(rate>=0),amount INTEGER NOT NULL CHECK(amount>=0))''',
+'''CREATE TABLE IF NOT EXISTS variant_units(variant_id INTEGER NOT NULL REFERENCES variants(id),unit TEXT NOT NULL COLLATE NOCASE,factor REAL NOT NULL CHECK(factor>0),can_buy INTEGER NOT NULL DEFAULT 1,can_sell INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(variant_id,unit))''',
+'''CREATE TABLE IF NOT EXISTS document_line_units(line_id INTEGER PRIMARY KEY REFERENCES document_lines(id) ON DELETE CASCADE,unit TEXT NOT NULL,factor REAL NOT NULL CHECK(factor>0))''',
+'''CREATE TABLE IF NOT EXISTS payment_accounts(account_id INTEGER PRIMARY KEY REFERENCES accounts(id),kind TEXT NOT NULL CHECK(kind IN ('cash','bank','wallet')))''',
 '''CREATE TABLE IF NOT EXISTS stock_movements(id INTEGER PRIMARY KEY,variant_id INTEGER NOT NULL REFERENCES variants(id),qty REAL NOT NULL,source_type TEXT NOT NULL,source_id INTEGER NOT NULL,date TEXT NOT NULL,note TEXT NOT NULL DEFAULT '')''',
 '''CREATE TABLE IF NOT EXISTS party_ledger(id INTEGER PRIMARY KEY,party_id INTEGER NOT NULL REFERENCES parties(id),debit INTEGER NOT NULL DEFAULT 0,credit INTEGER NOT NULL DEFAULT 0,source_type TEXT NOT NULL,source_id INTEGER NOT NULL,date TEXT NOT NULL,note TEXT NOT NULL DEFAULT '')''',
 '''CREATE TABLE IF NOT EXISTS accounts(id INTEGER PRIMARY KEY,code TEXT NOT NULL UNIQUE,name TEXT NOT NULL,type TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1)''',
@@ -46,7 +49,9 @@ class ItemLine {
   final int variantId;
   final double qty;
   final double rate;
-  const ItemLine(this.variantId,this.qty,this.rate);
+  final String? unit;
+  final double factor;
+  const ItemLine(this.variantId,this.qty,this.rate,{this.unit,this.factor=1});
 }
 
 class Store {
@@ -74,6 +79,8 @@ class Store {
       ['5000','Cost of Sales','expense'],['6100','Operating Expense','expense'],['6200','Salary Expense','expense']
     ]) {await db.rawInsert('INSERT OR IGNORE INTO accounts(code,name,type) VALUES(?,?,?)',a);}
     await db.rawInsert("INSERT OR IGNORE INTO expense_categories(name) VALUES('General')");
+    // Safe repeated migration; never change historical stock on upgrade.
+    await db.execute("INSERT OR IGNORE INTO payment_accounts(account_id,kind) SELECT id,CASE WHEN code='1000' THEN 'cash' ELSE 'bank' END FROM accounts WHERE code IN ('1000','1010')");
   }
 
   Future<List<Map<String,Object?>>> read(String sql,[List<Object?> args=const []]) => db.rawQuery(sql,args);
@@ -133,9 +140,39 @@ class Store {
     await db.rawUpdate('UPDATE $table SET active=0 WHERE id=?',[id]);
   }
   Future<List<Map<String,Object?>>> stock() => read('''SELECT v.id, p.name AS product,c.name AS category,v.sku,v.unit,coalesce(sum(m.qty),0) AS qty,
-    (SELECT group_concat(a.name||': '||vv.value,', ') FROM variant_values vv JOIN attributes a ON a.id=vv.attribute_id WHERE vv.variant_id=v.id) AS attrs
+    p.id AS product_id,(SELECT group_concat(a.name||': '||vv.value,', ') FROM variant_values vv JOIN attributes a ON a.id=vv.attribute_id WHERE vv.variant_id=v.id) AS attrs
     FROM variants v JOIN products p ON p.id=v.product_id JOIN categories c ON c.id=p.category_id
     LEFT JOIN stock_movements m ON m.variant_id=v.id WHERE v.active=1 GROUP BY v.id ORDER BY p.name,v.sku''');
+  /// A variant has one canonical stock unit (variants.unit).  All purchase/sale
+  /// units convert INTO canonical units; a historical invoice snapshots its factor.
+  Future<List<Map<String,Object?>>> unitOptions(int variant,{required bool sale}) async {
+    final rows=await read('SELECT unit FROM variants WHERE id=? AND active=1',[variant]);
+    if(rows.isEmpty)throw const FormatException('Active variation not found');
+    final base='${rows.first['unit']}';
+    final choices=<Map<String,Object?>>[{'unit':base,'factor':1.0}];
+    final more=await read('SELECT unit,factor FROM variant_units WHERE variant_id=? AND ${sale?'can_sell':'can_buy'}=1 ORDER BY unit',[variant]);
+    for(final r in more){if('${r['unit']}'.toLowerCase()!=base.toLowerCase())choices.add(r);}
+    return choices;
+  }
+  Future<void> setVariantUnit(int variant,String unit,double factor,{bool canBuy=true,bool canSell=true}) async {
+    if(unit.trim().isEmpty||!factor.isFinite||factor<=0||factor>100000000)throw const FormatException('Enter valid unit and positive conversion quantity');
+    await db.transaction((t)async{
+      final rows=await t.rawQuery('SELECT unit FROM variants WHERE id=? AND active=1',[variant]);
+      if(rows.isEmpty)throw const FormatException('Variation not found');
+      if('${rows.first['unit']}'.toLowerCase()==unit.trim().toLowerCase())throw const FormatException('Base stock unit is already available automatically at 1:1');
+      await t.rawInsert('INSERT INTO variant_units(variant_id,unit,factor,can_buy,can_sell) VALUES(?,?,?,?,?) ON CONFLICT(variant_id,unit) DO UPDATE SET factor=excluded.factor,can_buy=excluded.can_buy,can_sell=excluded.can_sell',[variant,unit.trim(),factor,canBuy?1:0,canSell?1:0]);
+      await audit(t,'SET','variant_unit',variant,'${unit.trim()} = $factor ${rows.first['unit']}');
+    });
+  }
+  Future<int> addPaymentAccount(String code,String name,String kind) async {
+    if(!{'cash','bank','wallet'}.contains(kind)||name.trim().isEmpty||code.trim().isEmpty)throw const FormatException('Account code, name and type required');
+    return db.transaction((t)async {
+      final id=await t.rawInsert('INSERT INTO accounts(code,name,type) VALUES(?,?,?)',[code.trim(),name.trim(),'asset']);
+      await t.rawInsert('INSERT INTO payment_accounts(account_id,kind) VALUES(?,?)',[id,kind]);
+      await audit(t,'ADD','payment_account',id,name.trim());
+      return id;
+    });
+  }
   Future<void> adjustStock(int variant,double diff,String reason) async {
     if(!diff.isFinite||diff==0||(diff*1000-(diff*1000).round()).abs()>0.00001) throw const FormatException('Adjustment must be nonzero with max 3 decimals');
     await db.transaction((t) async {
@@ -187,32 +224,45 @@ class Store {
     if(!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)||DateTime.tryParse(date)==null)throw const FormatException('Invalid invoice date');
     if(!{'sale','purchase'}.contains(kind)||items.isEmpty)throw const FormatException('Invalid bill or empty items');
     if(kind=='purchase'&&partyId==null)throw const FormatException('Supplier required');
-    if(items.any((x)=>!x.qty.isFinite||!x.rate.isFinite||x.qty<=0||x.rate<0||(x.qty*1000-(x.qty*1000).round()).abs()>0.00001))throw const FormatException('Invalid quantity or price');
+    if(items.any((x)=>!x.qty.isFinite||!x.rate.isFinite||!x.factor.isFinite||x.factor<=0||x.qty<=0||x.rate<0||(x.qty*1000-(x.qty*1000).round()).abs()>0.00001))throw const FormatException('Invalid quantity, unit factor or price');
     final checkedTotal=items.fold<int>(0,(a,b)=>a+pennies(b.qty*b.rate));
     final total=checkedTotal; // Invoice total in paisa, computed inside the transaction.
     if(!paid.isFinite) throw const FormatException('Invalid amount paid');
     final money=pennies(paid);
     if(money<0||money>total)throw const FormatException('Invalid amount paid');
-    final available=await t.rawQuery("SELECT id FROM accounts WHERE id=? AND code IN ('1000','1010') AND active=1",[paymentAccount]);
+    final available=await t.rawQuery('SELECT a.id FROM accounts a JOIN payment_accounts pa ON pa.account_id=a.id WHERE a.id=? AND a.active=1',[paymentAccount]);
     if(available.isEmpty)throw const FormatException('Choose a valid cash/bank account');
     {
       if(partyId!=null){final p=await t.rawQuery('SELECT kind FROM parties WHERE id=? AND active=1',[partyId]);if(p.isEmpty||p.first['kind']!=(kind=='sale'?'customer':'supplier'))throw const FormatException('Invalid customer/supplier');}
       for(final x in items){
-        final eligible=await t.rawQuery('''SELECT v.id FROM variants v JOIN products p ON p.id=v.product_id
+        final eligible=await t.rawQuery('''SELECT v.id,v.unit FROM variants v JOIN products p ON p.id=v.product_id
             JOIN categories c ON c.id=p.category_id WHERE v.id=? AND v.active=1 AND p.active=1 AND c.active=1''',[x.variantId]);
         if(eligible.isEmpty)throw const FormatException('Product variation is archived or missing');
+        final stockUnit='${eligible.first['unit']}';
+        final selectedUnit=(x.unit??stockUnit).trim();
+        if(selectedUnit.toLowerCase()!=stockUnit.toLowerCase()){
+          final conversion=await t.rawQuery('SELECT factor,can_buy,can_sell FROM variant_units WHERE variant_id=? AND unit=?',[x.variantId,selectedUnit]);
+          if(conversion.isEmpty || ((kind=='sale'?conversion.first['can_sell']:conversion.first['can_buy']) as int)!=1)throw FormatException('Unit $selectedUnit is not allowed for ${kind=='sale'?'sale':'purchase'}');
+          // Purchase pack lengths may vary; POS stores an explicit positive factor.
+          if(kind=='sale' && (numVal(conversion.first['factor'])-x.factor).abs()>0.000001)throw const FormatException('Sale unit factor changed; reselect the unit');
+        }else if((x.factor-1).abs()>0.000001)throw const FormatException('Base unit must use 1:1 conversion');
+        if(!((x.qty*x.factor).isFinite)||(x.qty*x.factor*1000000-(x.qty*x.factor*1000000).round()).abs()>0.00001)throw const FormatException('Converted stock quantity exceeds allowed precision');
       }
       final ref=existingInvoice??await _reserveInvoiceNumber(t,kind);
       final int id;
       if(existingId!=null){
         id=existingId;
         await t.rawUpdate("UPDATE documents SET kind=?,invoice=?,party_id=?,date=?,total=?,paid=?,notes=?,status='POSTED' WHERE id=?",[kind,ref,partyId,date,total,money,notes,id]);
+        await t.rawDelete('DELETE FROM document_line_units WHERE line_id IN (SELECT id FROM document_lines WHERE document_id=?)',[id]);
         await t.rawDelete('DELETE FROM document_lines WHERE document_id=?',[id]);
       }else{
         id=await t.rawInsert('INSERT INTO documents(kind,invoice,party_id,date,total,paid,notes) VALUES(?,?,?,?,?,?,?)',[kind,ref,partyId,date,total,money,notes]);
       }
-      for(final x in items){final amount=pennies(x.qty*x.rate);await t.rawInsert('INSERT INTO document_lines(document_id,variant_id,qty,rate,amount) VALUES(?,?,?,?,?)',[id,x.variantId,x.qty,pennies(x.rate),amount]);
-        await t.rawInsert('INSERT INTO stock_movements(variant_id,qty,source_type,source_id,date,note) VALUES(?,?,?,?,?,?)',[x.variantId,x.qty*(kind=='sale'?-1:1),kind,id,date,ref]);
+      for(final x in items){final amount=pennies(x.qty*x.rate);
+        final lineId=await t.rawInsert('INSERT INTO document_lines(document_id,variant_id,qty,rate,amount) VALUES(?,?,?,?,?)',[id,x.variantId,x.qty,pennies(x.rate),amount]);
+        final baseUnit=await t.rawQuery('SELECT unit FROM variants WHERE id=?',[x.variantId]);
+        await t.rawInsert('INSERT INTO document_line_units(line_id,unit,factor) VALUES(?,?,?)',[lineId,x.unit??baseUnit.first['unit'],x.factor]);
+        await t.rawInsert('INSERT INTO stock_movements(variant_id,qty,source_type,source_id,date,note) VALUES(?,?,?,?,?,?)',[x.variantId,x.qty*x.factor*(kind=='sale'?-1:1),kind,id,date,ref]);
       }
       final outstanding=total-money;
       if(partyId!=null){
@@ -244,8 +294,8 @@ class Store {
     if(attached.isNotEmpty)throw const FormatException('Void or reverse linked returns first');
     final d=ds.first;final kind=d['kind'] as String;final date=reversalDate??nowDate();
     await t.rawUpdate("UPDATE documents SET status='VOID' WHERE id=?",[id]);
-    final lines=await t.rawQuery('SELECT * FROM document_lines WHERE document_id=?',[id]);
-    for(final x in lines){await t.rawInsert('INSERT INTO stock_movements(variant_id,qty,source_type,source_id,date,note) VALUES(?,?,?,?,?,?)',[x['variant_id'],numVal(x['qty'])*(kind=='sale'?1:-1),'void_$kind',id,date,'Void invoice']);}
+    final lines=await t.rawQuery('SELECT l.*,coalesce(u.factor,1) AS stock_factor FROM document_lines l LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=?',[id]);
+    for(final x in lines){await t.rawInsert('INSERT INTO stock_movements(variant_id,qty,source_type,source_id,date,note) VALUES(?,?,?,?,?,?)',[x['variant_id'],numVal(x['qty'])*numVal(x['stock_factor'])*(kind=='sale'?1:-1),'void_$kind',id,date,'Void invoice']);}
     final ledger=await t.rawQuery("SELECT * FROM party_ledger WHERE source_id=? AND source_type IN ('sale','purchase','sale_payment','purchase_payment')",[id]);
     for(final l in ledger){await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',[l['party_id'],l['credit'],l['debit'],'void_$kind',id,date,'Reversal']);}
     final journals=await t.rawQuery('SELECT id FROM journal WHERE source_type=? AND source_id=?',[kind,id]);
@@ -260,7 +310,7 @@ class Store {
     final originals=await t.rawQuery("SELECT * FROM documents WHERE id=? AND status='POSTED'",[oldId]);
     if(originals.isEmpty||originals.first['kind']!=kind)throw const FormatException('Posted invoice not found');
     final original=originals.first;
-    final oldLines=await t.rawQuery('SELECT variant_id,qty,rate,amount FROM document_lines WHERE document_id=? ORDER BY id',[oldId]);
+    final oldLines=await t.rawQuery('SELECT l.variant_id,l.qty,l.rate,l.amount,coalesce(u.unit,v.unit) AS unit,coalesce(u.factor,1) AS factor FROM document_lines l JOIN variants v ON v.id=l.variant_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? ORDER BY l.id',[oldId]);
     final oldReturns=await t.rawQuery('''SELECT 1 FROM return_lines rl JOIN document_lines dl ON dl.id=rl.source_line_id WHERE dl.document_id=? LIMIT 1''',[oldId]);
     if(oldReturns.isNotEmpty)throw const FormatException('This invoice has return history. Contact administrator for a separate adjustment; invoice lines cannot be replaced.');
     await t.rawInsert('''INSERT INTO document_revisions(document_id,changed_at,old_invoice,old_date,old_party_id,old_total,old_paid,old_notes,old_lines_json)

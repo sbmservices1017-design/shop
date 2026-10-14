@@ -13,13 +13,15 @@ class _CartRow{
   final Map<String,Object?> product;
   final qty=TextEditingController(text:'1');
   final price=TextEditingController(text:'0');
-  _CartRow(this.product);
-  void dispose(){qty.dispose();price.dispose();}
+  late String unit;
+  final factor=TextEditingController(text:'1');
+  _CartRow(this.product){unit='${product['unit']}';}
+  void dispose(){qty.dispose();price.dispose();factor.dispose();}
 }
 class _ModernPosScreenState extends State<ModernPosScreen>{
   final store=Store.instance;
   final search=TextEditingController(),paid=TextEditingController(text:'0'),notes=TextEditingController();
-  List<Map<String,Object?>> catalog=[];Map<int,String> parties={};Map<int,String> accounts={};
+  List<Map<String,Object?>> catalog=[];Map<int,String> parties={};Map<int,String> accounts={};Map<int,List<Map<String,Object?>>> availableUnits={};
   final cart=<_CartRow>[];
   String category='All',date=nowDate();int? partyId,accountId;bool busy=false;String? error;
   bool get sale=>widget.kind=='sale';
@@ -28,10 +30,17 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
   Future<void> load()async{
     final c=await store.stock();
     final p=await store.read('SELECT id,name FROM parties WHERE kind=? AND active=1 ORDER BY name',[sale?'customer':'supplier']);
-    final a=await store.read("SELECT id,name FROM accounts WHERE active=1 AND code IN ('1000','1010') ORDER BY id");
+    final a=await store.read('SELECT a.id,a.name FROM accounts a JOIN payment_accounts pa ON pa.account_id=a.id WHERE a.active=1 ORDER BY a.name');
+    final conversions=await store.read('SELECT variant_id,unit,factor,can_buy,can_sell FROM variant_units');
+    final unitMap=<int,List<Map<String,Object?>>>{};
+    for(final variant in c){
+      final id=variant['id'] as int;
+      unitMap[id]=[{'unit':'${variant['unit']}','factor':1.0},
+        ...conversions.where((x)=>x['variant_id']==id && (sale?x['can_sell']:x['can_buy'])==1 && '${x['unit']}'.toLowerCase()!='${variant['unit']}'.toLowerCase())];
+    }
     if(!mounted)return;
     setState((){
-      catalog=c;parties={for(final x in p)x['id'] as int:'${x['name']}'};
+      catalog=c;availableUnits=unitMap;parties={for(final x in p)x['id'] as int:'${x['name']}'};
       accounts={for(final x in a)x['id'] as int:'${x['name']}'};
       accountId??=accounts.isEmpty?null:accounts.keys.first;
       if(!sale)partyId??=parties.isEmpty?null:parties.keys.first;
@@ -41,9 +50,26 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
   double get payment=>double.tryParse(paid.text)??0;
   String get paymentLabel=>payment>=total&&total>0?'PAID':payment>0?'PARTIALLY PAID':'UNPAID';
   void add(Map<String,Object?> entry){
-    final row=cart.where((x)=>x.product['id']==entry['id']);
+    final row=cart.where((x)=>x.product['id']==entry['id'] && x.unit=='${entry['unit']}');
     if(row.isNotEmpty){final r=row.first;r.qty.text='${(double.tryParse(r.qty.text)??0)+1}';setState((){});}
     else{setState(()=>cart.add(_CartRow(entry)));}
+  }
+  Future<void> chooseVariant(Map<String,Object?> product)async {
+    final options=catalog.where((v)=>v['product_id']==product['product_id']).toList();
+    if(options.length==1){add(options.first);return;}
+    final selected=await showDialog<Map<String,Object?>>(context:context,builder:(c)=>AlertDialog(
+      title:Text('Select size / color / variation — ${product['product']}'),
+      content:SizedBox(width:580,height:options.length>7?475:options.length*66.0+25,
+        child:ListView(children:options.map((v)=>ListTile(
+          title:Text('${v['sku']}   •   ${v['attrs']??'Standard'}'),
+          subtitle:Text('Stock: ${v['qty']} ${v['unit']}'),
+          onTap:()=>Navigator.pop(c,v),trailing:const Icon(Icons.add_circle_outline))).toList())),
+      actions:[TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Cancel'))]));
+    if(selected!=null&&mounted)add(selected);
+  }
+  void changeCartUnit(_CartRow row,String unit){
+    final choice=(availableUnits[row.product['id'] as int]??[]).firstWhere((u)=>u['unit']==unit);
+    setState((){row.unit=unit;row.factor.text='${numVal(choice['factor'])}';});
   }
   String money(double n)=>'Rs. ${n.toStringAsFixed(2)}';
   Future<void> submit()async{
@@ -54,7 +80,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
       if(cart.isEmpty)throw const FormatException('Add at least one product');
       if(accountId==null)throw const FormatException('Choose Cash or Bank account');
       if(!sale && partyId==null)throw const FormatException('Select a supplier');
-      final lines=cart.map((r)=>ItemLine(r.product['id'] as int,double.parse(r.qty.text),double.parse(r.price.text))).toList();
+      final lines=cart.map((r)=>ItemLine(r.product['id'] as int,double.parse(r.qty.text),double.parse(r.price.text),unit:r.unit,factor:double.parse(r.factor.text))).toList();
       if(lines.any((x)=>x.rate<0||x.qty<=0))throw const FormatException('Quantity must be positive; price cannot be negative');
       if(payment<0 || payment>total)throw const FormatException('Payment cannot exceed bill total');
       if(sale && partyId==null && payment<total)throw const FormatException('Select a customer when payment is partially or fully on credit');
@@ -67,12 +93,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
       await load();
       if(!mounted)return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('${sale?'Sale':'Purchase'} #$id saved · stock updated · $savedStatus')));
-      final printNow=await showDialog<bool>(context:context,builder:(c)=>AlertDialog(title:const Text('Invoice saved'),content:const Text('Do you want to print the A4 invoice now?'),actions:[TextButton(onPressed:()=>Navigator.pop(c,false),child:const Text('Not now')),FilledButton(onPressed:()=>Navigator.pop(c,true),child:const Text('Print A4'))]));
-      if(printNow==true){
-        final items=await store.read('''SELECT p.name AS Product,v.sku AS SKU,l.qty AS Quantity,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount
-          FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id WHERE l.document_id=?''',[id]);
-        await Exports.pdf(ReportResult('${sale?'Sale':'Purchase'} Invoice #$id',const ['Product','SKU','Quantity','Rate','Amount'],items.map((m)=>['${m['Product']}','${m['SKU']}','${m['Quantity']}','${m['Rate']}','${m['Amount']}']).toList()),print:true);
-      }
+      // Auto-print intentionally disabled; reprint from Sales/Purchases invoice list.
       widget.onChange();
     }catch(e){if(mounted)setState(()=>error='$e');}
     finally{if(mounted)setState(()=>busy=false);}
@@ -81,21 +102,32 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
     final query=search.text.toLowerCase();
     final filtered=catalog.where((p)=>(category=='All'||p['category']==category)&&('${p['product']} ${p['sku']} ${p['attrs']}').toLowerCase().contains(query)).toList();
     final cats=['All',...{for(final p in catalog)'${p['category']}'}];
+    final grouped=<int,Map<String,Object?>>{};
+    for(final item in filtered){grouped.putIfAbsent(item['product_id'] as int,()=>item);}
+    final displayProducts=grouped.values.toList();
     return LayoutBuilder(builder:(ctx,layout)=>Padding(padding:const EdgeInsets.all(20),child:Column(children:[
       Row(children:[Icon(sale?Icons.point_of_sale:Icons.local_shipping_outlined,color:const Color(0xFF4B63D9),size:26),const SizedBox(width:10),Expanded(child:Text(sale?'Sales POS · Manual Billing':'Purchase POS · Stock In',style:const TextStyle(fontSize:20,fontWeight:FontWeight.w800))),const SizedBox.shrink()]),const SizedBox(height:12),
-      Expanded(child:layout.maxWidth>1000?Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(flex:6,child:catalogPane(filtered,cats)),const SizedBox(width:14),Expanded(flex:5,child:cartPane())]):ListView(children:[SizedBox(height:400,child:catalogPane(filtered,cats)),const SizedBox(height:12),SizedBox(height:650,child:cartPane())]))
+      Expanded(child:layout.maxWidth>1000?Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(flex:6,child:catalogPane(displayProducts,cats)),const SizedBox(width:14),Expanded(flex:5,child:cartPane())]):ListView(children:[SizedBox(height:400,child:catalogPane(displayProducts,cats)),const SizedBox(height:12),SizedBox(height:650,child:cartPane())]))
     ])));
   }
   Widget catalogPane(List<Map<String,Object?>> filtered,List<String> categories)=>Card(child:Padding(padding:const EdgeInsets.all(15),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
     TextField(controller:search,onChanged:(_)=>setState((){}),decoration:const InputDecoration(prefixIcon:Icon(Icons.search),labelText:'Search product, variation, SKU, design')),const SizedBox(height:12),
     SizedBox(height:48,child:ListView(scrollDirection:Axis.horizontal,children:categories.map((c)=>Padding(padding:const EdgeInsets.only(right:8),child:ChoiceChip(label:Text(c),selected:c==category,onSelected:(_)=>setState(()=>category=c)))).toList())),
-    const SizedBox(height:6),Expanded(child:filtered.isEmpty?const Center(child:Text('No matching variations')):ListView.builder(itemCount:filtered.length,itemBuilder:(ctx,i){final p=filtered[i];final qty=numVal(p['qty']);return Card(color:const Color(0xFFF6F8FD),child:ListTile(onTap:()=>add(p),title:Text('${p['product']} • ${p['sku']}',style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text('${p['attrs']??'No attributes'}\nStock: $qty ${p['unit']} · ${p['category']}',style:TextStyle(color:qty<0?Colors.deepOrange:Colors.blueGrey)),isThreeLine:true,trailing:const Icon(Icons.add_circle,color:Color(0xFF4B63D9))));}))
+    const SizedBox(height:6),Expanded(child:filtered.isEmpty?const Center(child:Text('No matching variations')):ListView.builder(itemCount:filtered.length,itemBuilder:(ctx,i){final p=filtered[i];final qty=numVal(p['qty']);return Card(color:const Color(0xFFF6F8FD),child:ListTile(onTap:()=>chooseVariant(p),title:Text('${p['product']}',style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text('Select size, color or design • ${p['category']}\nExample variation: ${p['sku']} • stock $qty ${p['unit']}',style:TextStyle(color:qty<0?Colors.deepOrange:Colors.blueGrey)),isThreeLine:true,trailing:const Icon(Icons.add_circle,color:Color(0xFF4B63D9))));}))
   ])));
   Widget cartPane()=>Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
     Row(children:[Expanded(child:Text('Bill Cart · ${cart.length} SKU',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w800))),Text(paymentLabel,style:TextStyle(fontWeight:FontWeight.w800,fontSize:11,color:paymentLabel=='PAID'?Colors.green:Colors.deepOrange))]),const SizedBox(height:9),
     Expanded(child:cart.isEmpty?const Center(child:Text('Select a product from the left')):ListView(children:[for(final row in cart)Card(color:const Color(0xFFF9FAFD),child:Padding(padding:const EdgeInsets.all(9),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
       Row(children:[Expanded(child:Text('${row.product['product']} · ${row.product['sku']}',style:const TextStyle(fontWeight:FontWeight.bold))),IconButton(onPressed:(){setState(()=>cart.remove(row));row.dispose();},icon:const Icon(Icons.close,size:18))]),
-      Text('Variation: ${row.product['attrs']??'Standard'}',style:const TextStyle(color:Colors.blueGrey,fontSize:11)),const SizedBox(height:6),Row(children:[Expanded(child:TextField(controller:row.qty,decoration:const InputDecoration(labelText:'Quantity'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){}))),const SizedBox(width:8),Expanded(child:TextField(controller:row.price,decoration:InputDecoration(labelText:sale?'Manual selling rate':'Purchase rate'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){})))]),const SizedBox(height:5),Align(alignment:Alignment.centerRight,child:Text(money((double.tryParse(row.qty.text)??0)*(double.tryParse(row.price.text)??0)),style:const TextStyle(fontWeight:FontWeight.bold)))
+      Text('Variation: ${row.product['attrs']??'Standard'}',style:const TextStyle(color:Colors.blueGrey,fontSize:11)),const SizedBox(height:6),
+      Row(children:[Expanded(child:DropdownButtonFormField<String>(key:ValueKey('${row.product['id']}-${row.unit}'),initialValue:row.unit,isExpanded:true,
+        decoration:const InputDecoration(labelText:'Purchase / sale unit'),
+        items:(availableUnits[row.product['id'] as int]??[{'unit':row.unit,'factor':1.0}]).map((u)=>DropdownMenuItem(value:'${u['unit']}',child:Text('${u['unit']}  (×${u['factor']})',overflow:TextOverflow.ellipsis))).toList(),
+        onChanged:(v){if(v!=null)changeCartUnit(row,v);})),
+        if(!sale)...[const SizedBox(width:8),Expanded(child:TextField(controller:row.factor,keyboardType:TextInputType.number,
+          decoration:InputDecoration(labelText:'${row.product['unit']} per ${row.unit}',helperText:'Actual pack / roll size'),onChanged:(_)=>setState((){})))]]),
+      const SizedBox(height:4),Text('Stock impact: ${((double.tryParse(row.qty.text)??0)*(double.tryParse(row.factor.text)??0)).toStringAsFixed(3)} ${row.product['unit']}',style:const TextStyle(color:Colors.blueGrey,fontSize:11)),
+      const SizedBox(height:6),Row(children:[Expanded(child:TextField(controller:row.qty,decoration:const InputDecoration(labelText:'Quantity'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){}))),const SizedBox(width:8),Expanded(child:TextField(controller:row.price,decoration:InputDecoration(labelText:sale?'Manual selling rate':'Purchase rate'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){})))]),const SizedBox(height:5),Align(alignment:Alignment.centerRight,child:Text(money((double.tryParse(row.qty.text)??0)*(double.tryParse(row.price.text)??0)),style:const TextStyle(fontWeight:FontWeight.bold)))
     ])))])),const Divider(),
     DropdownButtonFormField<int?>(value:partyId,isExpanded:true,decoration:InputDecoration(labelText:sale?'Customer':'Supplier'),items:[if(sale)const DropdownMenuItem<int?>(value:null,child:Text('Walk-in (fully paid only)')),...parties.entries.map((e)=>DropdownMenuItem<int?>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis)))],onChanged:(v)=>setState(()=>partyId=v)),const SizedBox(height:8),
     DropdownButtonFormField<int>(value:accountId,decoration:const InputDecoration(labelText:'Payment account'),items:accounts.entries.map((e)=>DropdownMenuItem<int>(value:e.key,child:Text(e.value))).toList(),onChanged:(v)=>setState(()=>accountId=v)),const SizedBox(height:8),
@@ -112,9 +144,9 @@ class _HistoryPane extends StatelessWidget {
   final Future<void> Function(int invoiceId)? onCorrectInvoice;
   const _HistoryPane({required this.kind,required this.onBack,required this.onChange,this.onCorrectInvoice});
   Future<void> reprint(int id)async{
-    final rows=await Store.instance.read('''SELECT p.name AS Product,v.sku AS SKU,l.qty AS Quantity,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount
-      FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id WHERE l.document_id=?''',[id]);
-    await Exports.pdf(ReportResult('Invoice #$id',const ['Product','SKU','Quantity','Rate','Amount'],rows.map((r)=>['${r['Product']}','${r['SKU']}','${r['Quantity']}','${r['Rate']}','${r['Amount']}']).toList()),print:true);
+    final rows=await Store.instance.read('''SELECT p.name AS Product,v.sku AS SKU,l.qty AS Quantity,coalesce(u.unit,v.unit) AS Unit,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount
+      FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=?''',[id]);
+    await Exports.pdf(ReportResult('Invoice #$id',const ['Product','SKU','Quantity','Unit','Rate','Amount'],rows.map((r)=>['${r['Product']}','${r['SKU']}','${r['Quantity']}','${r['Unit']}','${r['Rate']}','${r['Amount']}']).toList()),print:true);
   }
   @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:Store.instance.read('''SELECT d.*,coalesce(p.name,'Walk-in') AS party FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE d.kind=? ORDER BY d.id DESC LIMIT 150''',[kind]),builder:(ctx,snap){
     if(!snap.hasData)return const Center(child:CircularProgressIndicator());

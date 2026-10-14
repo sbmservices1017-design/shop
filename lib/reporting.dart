@@ -63,9 +63,9 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
       if(f.maxAmount!=null){where.add('l.amount<=?');args.add(pennies(f.maxAmount!));}
       if(f.search.isNotEmpty){where.add('(d.invoice LIKE ? OR p.name LIKE ? OR v.sku LIKE ? OR pa.name LIKE ?)');
         args.addAll(List.filled(4,'%${f.search}%'));}
-      sql='''SELECT d.date AS Date,d.invoice AS Invoice,coalesce(pa.name,'Walk-in') AS Party,p.name AS Product,v.sku AS SKU,l.qty AS Qty,v.unit AS Unit,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount,d.paid/100.0 AS 'Invoice Paid',d.total/100.0 AS 'Invoice Total'
+      sql='''SELECT d.date AS Date,d.invoice AS Invoice,coalesce(pa.name,'Walk-in') AS Party,p.name AS Product,v.sku AS SKU,l.qty AS Qty,coalesce(lu.unit,v.unit) AS Unit,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount,d.paid/100.0 AS 'Invoice Paid',d.total/100.0 AS 'Invoice Total'
         FROM documents d JOIN document_lines l ON l.document_id=d.id JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id JOIN categories c ON c.id=p.category_id
-        LEFT JOIN parties pa ON pa.id=d.party_id WHERE ${where.join(' AND ')} ORDER BY d.date DESC,d.id DESC''';
+        LEFT JOIN parties pa ON pa.id=d.party_id LEFT JOIN document_line_units lu ON lu.line_id=l.id WHERE ${where.join(' AND ')} ORDER BY d.date DESC,d.id DESC''';
       headers=['Date','Invoice','Party','Product','SKU','Qty','Unit','Rate','Amount','Invoice Paid','Invoice Total'];
       break;
     case 'Products':
@@ -144,7 +144,7 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
       (p.net-p.paid)/100.0 AS Outstanding FROM payroll p JOIN employees e ON e.id=p.employee_id WHERE ${where.join(' AND ')} ORDER BY p.date DESC''';
       headers=['Date','Employee','Period','Gross','Recovered','Net','Paid','Outstanding'];break;
     case 'Cash & Bank':
-      where.add(dateFilter('j.date'));where.add("a.code IN ('1000','1010')");
+      where.add(dateFilter('j.date'));where.add("a.id IN (SELECT account_id FROM payment_accounts)");
       sql='''SELECT j.date AS Date,a.name AS Account,j.source_type AS Source,j.note AS Description,jl.debit/100.0 AS Debit,jl.credit/100.0 AS Credit
       FROM journal_lines jl JOIN journal j ON j.id=jl.journal_id JOIN accounts a ON a.id=jl.account_id WHERE ${where.join(' AND ')} ORDER BY j.date,j.id''';
       headers=['Date','Account','Source','Description','Debit','Credit'];break;

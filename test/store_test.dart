@@ -30,6 +30,56 @@ void main(){
     await s.voidDocument(purchase);
     expect(numVal((await s.stock()).first['qty']),0);
   });
+  test('roll purchases, gazz sales, returns and void preserve base-feet stock',()async{
+    final cat=await s.addCategory('Roll goods');
+    final product=await s.addProduct(cat,'Sheet roll');
+    final vid=await s.addVariant(product,'ROLL-FT-01','ft',{},0);
+    await s.setVariantUnit(vid,'roll',100,canSell:false);
+    await s.setVariantUnit(vid,'gazz',3,canBuy:false);
+    final supplier=await s.addParty('supplier','Roll Supplier','','');
+    final customer=await s.addParty('customer','Roll Buyer','','');
+    final cash=(await s.read("SELECT id FROM accounts WHERE code='1000'")).first['id'] as int;
+    expect((await s.unitOptions(vid,sale:false)).any((r)=>r['unit']=='roll'),true);
+    expect((await s.unitOptions(vid,sale:true)).any((r)=>r['unit']=='roll'),false);
+    final purchase=await s.postDocument('purchase',supplier,nowDate(),
+      [const ItemLine(vid,2,1000,unit:'roll',factor:100)],0,cash);
+    expect(numVal((await s.stock()).firstWhere((r)=>r['id']==vid)['qty']),200);
+    final sale=await s.postDocument('sale',customer,nowDate(),
+      [const ItemLine(vid,5,250,unit:'gazz',factor:3)],0,cash);
+    expect(numVal((await s.stock()).firstWhere((r)=>r['id']==vid)['qty']),185);
+    final line=(await s.read('SELECT id FROM document_lines WHERE document_id=?',[sale])).first['id'] as int;
+    final ret=await s.postReturn(sale,[ReturnItem(line,1)],0,cash,'One gazz returned');
+    expect(numVal((await s.stock()).firstWhere((r)=>r['id']==vid)['qty']),188);
+    await s.voidReturn(ret);
+    expect(numVal((await s.stock()).firstWhere((r)=>r['id']==vid)['qty']),185);
+    await s.voidDocument(sale);
+    await s.voidDocument(purchase);
+    expect(numVal((await s.stock()).firstWhere((r)=>r['id']==vid)['qty']),0);
+    expect(await s.verifyDatabase(),isEmpty);
+  });
+
+  test('packets into pieces and custom POS payment account with ledger',()async{
+    final cat=await s.addCategory('Packet products');
+    final product=await s.addProduct(cat,'Door mat packet');
+    final vid=await s.addVariant(product,'PACK-PCS-01','pcs',{},0);
+    await s.setVariantUnit(vid,'packet',12,canSell:false);
+    final supplier=await s.addParty('supplier','Packet Supplier','','');
+    final customer=await s.addParty('customer','Packet Buyer','','');
+    final wallet=await s.addPaymentAccount('1098','Owner Wallet','wallet');
+    final purchase=await s.postDocument('purchase',supplier,nowDate(),
+      [const ItemLine(vid,4,1500,unit:'packet',factor:12)],0,wallet);
+    final sale=await s.postDocument('sale',customer,nowDate(),
+      [ItemLine(vid,7,150)],1050,wallet);
+    expect(numVal((await s.stock()).firstWhere((r)=>r['id']==vid)['qty']),41);
+    final payments=await s.read('SELECT account_id FROM payment_accounts WHERE account_id=?',[wallet]);
+    expect(payments.length,1);
+    final journal=await s.read("SELECT j.id FROM journal j JOIN journal_lines l ON l.journal_id=j.id WHERE l.account_id=? AND j.source_type='sale' AND j.source_id=?",[wallet,sale]);
+    expect(journal,isNotEmpty);
+    await s.voidDocument(sale);
+    await s.voidDocument(purchase);
+    expect(numVal((await s.stock()).firstWhere((r)=>r['id']==vid)['qty']),0);
+  });
+
   test('employee advance and payroll are reflected in ledger',()async{
     final cash=(await s.read("SELECT id FROM accounts WHERE code='1000'")).first['id'] as int;
     final e=await s.addEmployee('Team Member','Shop assistant',30000);

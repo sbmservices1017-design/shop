@@ -1,4 +1,4 @@
-name: Build ShopDesk Windows EXE (v0.8.2)
+name: Build ShopDesk Windows EXE (v0.9.0)
 
 on:
   workflow_dispatch:
@@ -33,12 +33,14 @@ jobs:
           }
           if (-not $source.Contains('existingId:oldId,existingInvoice:')) { throw 'Same-ID invoice correction not uploaded.' }
           if (-not $source.Contains('_reserveInvoiceNumber')) { throw 'Invoice serial engine not uploaded.' }
+          if (-not $source.Contains('document_line_units')) { throw 'Multi-unit invoice snapshot tables missing.' }
+          if (-not ((Get-Content 'lib/modern_pos.dart' -Raw).Contains('chooseVariant'))) { throw 'POS variation picker missing.' }
           $ui = Get-Content 'lib/main.dart' -Raw
           if ($ui.Contains("r.kind='expense'") -and $ui.Contains("future:s.read('SELECT e.*")) { throw 'Expense SQL quote fix is missing in lib/main.dart' }
           if (-not (Test-Path 'lib/commercial_core.dart')) { throw 'Commercial upgrade source missing' }
           if (-not (Test-Path 'lib/license_public.dart')) { throw 'License public key missing' }
           if (Test-Path 'shopdesk_license_private.pem') { throw 'PRIVATE SIGNING KEY MUST NEVER BE COMMITTED TO GITHUB' }
-          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.8.2'))) { throw 'ShopDesk v0.8.2 source version missing' }
+          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.9.0'))) { throw 'ShopDesk v0.9.0 source version missing' }
           if (-not (Test-Path 'lib/boot_setup.dart')) { throw 'First-launch setup module missing' }
           if (-not (Test-Path 'lib/settings_hub.dart')) { throw 'Settings hub module missing' }
           $settings = Get-Content 'lib/settings_hub.dart' -Raw
@@ -52,7 +54,7 @@ jobs:
           if (-not (Test-Path 'assets/branding/sbm_logo.png')) { throw 'SBM transparent logo missing' }
           if (-not ((Get-Content 'lib/main.dart' -Raw).Contains('const SbmFooter()'))) { throw 'SBM global footer missing from Shell' }
           if (-not ((Get-Content 'lib/nexa_theme.dart' -Raw).Contains('Expanded(flex: 43, child: _brandPanel())'))) { throw 'SBM split-screen login layout missing' }
-          Write-Host 'ShopDesk v0.8.2 SBM-branded source layout confirmed'  
+          Write-Host 'ShopDesk v0.9.0 SBM-branded source layout confirmed'  
 
       - name: Generate native Windows files
         run: flutter create --platforms=windows --project-name shopdesk_flutter --no-pub .

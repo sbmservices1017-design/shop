@@ -1,3 +1,7 @@
+# ShopDesk Pro v0.9.0 — Multi-Unit POS & Custom Payment Accounts
+
+Client change details, unit conversion precautions, data migration and acceptance checklist: `docs/CLIENT_MULTIUNIT_UPGRADE_V0_9.md`.
+
 # ShopDesk Pro v0.8.0 — White/Light-Blue UI + Invoice Workflows
 
 **Latest changes:** See `docs/UPGRADE_V0_8_CHECKLIST.md`. All updates are in ONE Flutter source project. It contains the source and GitHub Actions Windows release workflow, **not a precompiled EXE**.

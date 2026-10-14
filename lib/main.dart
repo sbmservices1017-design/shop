@@ -231,7 +231,7 @@ Widget small(String s,VoidCallback tap,{IconData icon=Icons.edit_outlined}){
 }
 Future<Map<int,String>> options(Store s,String query,[List<Object?> args=const []]) async => {for(final x in await s.read(query,args))x['id'] as int:'${x['name']}'};
 Future<Map<int,String>> variants(Store s) async => {for(final x in await s.stock())x['id'] as int:'${x['product']} • ${x['sku']} (${x['unit']})'};
-Future<Map<int,String>> accountChoices(Store s)=>options(s,"SELECT id,name FROM accounts WHERE type='asset' AND code IN ('1000','1010') ORDER BY id");
+Future<Map<int,String>> accountChoices(Store s)=>options(s,"SELECT a.id,a.name FROM accounts a JOIN payment_accounts p ON p.account_id=a.id WHERE a.active=1 ORDER BY a.name");
 
 class Dashboard extends StatelessWidget {
   final int revision;const Dashboard({super.key,required this.revision});
@@ -307,7 +307,21 @@ class _ProductsScreenState extends State<ProductsScreen>{final s=Store.instance;
           final vals=await ask(context,'Edit variation fields',attrs.map((a)=>FieldSpec('${a['id']}','${a['name']} • ${a['kind']}${a['kind']=='choice'?' • ${a['choices']}':''}',initial:'${a['val']}',mustFill:false,numeric:a['kind']=='number')).toList());
           if(vals!=null)await s.updateVariantValues(id,{for(final e in vals.entries)int.parse(e.key):e.value});
         }),icon:Icons.tune_outlined),
-        small('Edit SKU/unit',()=>change(()async{final f=await ask(context,'Edit variant',[FieldSpec('sku','SKU',initial:'${v['sku']}'),FieldSpec('unit','Unit',initial:'${v['unit']}')]);if(f!=null)await s.db.rawUpdate('UPDATE variants SET sku=?,unit=? WHERE id=?',[f['sku'],f['unit'],v['id']]);})),
+        small('Purchase / Sale Units',()=>change(()async{
+          final f=await ask(context,'Configure Unit Conversion: ${v['sku']}',[
+            const FieldSpec('unit','Unit (roll / packet / feet / gazz)'),
+            FieldSpec('factor','How many ${v['unit']} per 1 selected unit',numeric:true),
+            FieldSpec('buy','Allow buying in this unit?',choices:const {1:'Yes',0:'No'}),
+            FieldSpec('sell','Allow selling in this unit?',choices:const {1:'Yes',0:'No'})]);
+          if(f!=null)await s.setVariantUnit(v['id'] as int,f['unit']!,double.parse(f['factor']!),canBuy:f['buy']=='1',canSell:f['sell']=='1');
+        }),icon:Icons.straighten_outlined),
+        small('Edit SKU/unit',()=>change(()async{final f=await ask(context,'Edit variant',[FieldSpec('sku','SKU',initial:'${v['sku']}'),FieldSpec('unit','Unit',initial:'${v['unit']}')]);if(f!=null){
+            if('${f['unit']}'.toLowerCase()!='${v['unit']}'.toLowerCase()){
+              final movement=await s.read('SELECT 1 FROM stock_movements WHERE variant_id=? LIMIT 1',[v['id']]);
+              if(movement.isNotEmpty)throw const FormatException('Cannot change base stock unit after inventory transactions. Create a new variant or perform a reviewed inventory migration.');
+            }
+            await s.db.rawUpdate('UPDATE variants SET sku=?,unit=? WHERE id=?',[f['sku'],f['unit'],v['id']]);
+          }})),
         small('Archive',()=>change(()async{if(await confirm(context,'Archive variant?'))await s.archive('variants',v['id'] as int);}),icon:Icons.archive_outlined)])]).toList())]);
   });
 }
@@ -337,8 +351,8 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
   Future<void> create([int? existing]) async {final ok=await showDialog<bool>(context:context,builder:(ctx)=>InvoiceDialog(kind:widget.kind,existingId:existing));if(ok==true)widget.onChange();}
   Future<void> voidIt(int id)async{try{if(await confirm(context,'Void invoice? Stock, balances and journal entries will be reversed.')){await s.voidDocument(id);widget.onChange();}}catch(e){if(mounted)await showError(context,e);}}
   Future<void> previewInvoice(Map<String,Object?> row)async{
-    try{final x=await s.read('''SELECT p.name AS Product,v.sku AS SKU,l.qty AS Qty,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id WHERE l.document_id=?''',[row['id']]);
-      final rpt=ReportResult('Invoice ${row['invoice']}',const ['Product','SKU','Qty','Rate','Amount'],x.map((r)=>['${r['Product']}','${r['SKU']}','${r['Qty']}','${r['Rate']}','${r['Amount']}']).toList());
+    try{final x=await s.read('''SELECT p.name AS Product,v.sku AS SKU,l.qty AS Qty,coalesce(u.unit,v.unit) AS Unit,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=?''',[row['id']]);
+      final rpt=ReportResult('Invoice ${row['invoice']}',const ['Product','SKU','Qty','Unit','Rate','Amount'],x.map((r)=>['${r['Product']}','${r['SKU']}','${r['Qty']}','${r['Unit']}','${r['Rate']}','${r['Amount']}']).toList());
       if(!mounted)return;
       await showDialog(context:context,builder:(ctx)=>AlertDialog(title:Text('${row['invoice']}  |  ${row['party']}'),content:SizedBox(width:640,child:Column(mainAxisSize:MainAxisSize.min,children:[listing(rpt.headings,rpt.rows.map((r)=>r.map((v)=>txt(v)).toList()).toList()),Text('Total: ${funds(row['total'])}     Paid: ${funds(row['paid'])}')])) ,actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close')),OutlinedButton.icon(onPressed:()=>Exports.pdf(rpt),icon:const Icon(Icons.picture_as_pdf),label:const Text('PDF')),FilledButton.icon(onPressed:()=>Exports.pdf(rpt,print:true),icon:const Icon(Icons.print),label:const Text('A4 Print'))]));
     }catch(e){if(mounted)await showError(context,e);}
@@ -392,14 +406,14 @@ class _ReturnScreenState extends State<ReturnScreen>{final s=Store.instance;
     final choice=await ask(context,'Select original sale / purchase',[FieldSpec('doc','Invoice',choices:{for(final d in docs)d['id'] as int:'${d['invoice']} • ${d['party']}'})]);
     if(choice==null)return;
     final id=int.parse(choice['doc']!);
-    final lines=await s.read('''SELECT l.id,p.name AS product,v.sku,l.qty,l.rate,
+    final lines=await s.read('''SELECT l.id,p.name AS product,v.sku,l.qty,l.rate,coalesce(u.unit,v.unit) AS item_unit,
       coalesce((SELECT sum(rl.qty) FROM return_lines rl JOIN document_returns dr ON dr.id=rl.return_id
       WHERE rl.source_line_id=l.id AND dr.status='POSTED'),0) AS previously_returned
-      FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id WHERE l.document_id=?''',[id]);
+      FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=?''',[id]);
     final accounts=await accountChoices(s);
     if(!mounted)return;
     final specs=<FieldSpec>[
-      ...lines.map((l)=>FieldSpec('line_${l['id']}','${l['product']} / ${l['sku']} • remaining ${numVal(l['qty'])-numVal(l['previously_returned'])}',initial:'0',numeric:true)),
+      ...lines.map((l)=>FieldSpec('line_${l['id']}','${l['product']} / ${l['sku']} • remaining ${numVal(l['qty'])-numVal(l['previously_returned'])} ${l['item_unit']}',initial:'0',numeric:true)),
       const FieldSpec('refund','Refund now Rs. (0 if credit adjustment)',initial:'0',numeric:true),
       FieldSpec('account','Cash / Bank account',choices:accounts),
       const FieldSpec('reason','Return reason',initial:'Customer / supplier return')];
@@ -437,8 +451,8 @@ class _InvoiceDialogState extends State<InvoiceDialog>{
       final rows=await s.read("SELECT * FROM documents WHERE id=? AND status='POSTED' AND kind=?",[widget.existingId,widget.kind]);
       if(rows.isEmpty)throw const FormatException('Invoice not found or already voided');
       existing=rows.first;
-      oldLines=await s.read('SELECT variant_id,qty,rate FROM document_lines WHERE document_id=? ORDER BY id',[widget.existingId]);
-      final previousAccounts=await s.read("SELECT jl.account_id FROM journal j JOIN journal_lines jl ON jl.journal_id=j.id JOIN accounts a ON a.id=jl.account_id WHERE j.source_type=? AND j.source_id=? AND a.code IN ('1000','1010') LIMIT 1",[widget.kind,widget.existingId]);
+      oldLines=await s.read('''SELECT l.variant_id,l.qty,l.rate,coalesce(u.unit,v.unit) AS sale_unit,coalesce(u.factor,1) AS factor FROM document_lines l JOIN variants v ON v.id=l.variant_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? ORDER BY l.id''',[widget.existingId]);
+      final previousAccounts=await s.read("SELECT jl.account_id FROM journal j JOIN journal_lines jl ON jl.journal_id=j.id JOIN accounts a ON a.id=jl.account_id WHERE j.source_type=? AND j.source_id=? AND a.id IN (SELECT account_id FROM payment_accounts) LIMIT 1",[widget.kind,widget.existingId]);
       if(previousAccounts.isNotEmpty)oldPaymentAccount=previousAccounts.first['account_id'] as int;
     }
     if(!mounted)return;
@@ -450,7 +464,7 @@ class _InvoiceDialogState extends State<InvoiceDialog>{
         date=existing['date'] as String;
         paid.text=rupees(existing['paid']).toStringAsFixed(2);
         notes.text='${existing['notes']}';
-        for(final row in oldLines!){lines.add(_DraftLine(row['variant_id'] as int,quantity:'${row['qty']}',price:rupees(row['rate']).toStringAsFixed(2)));}
+        for(final row in oldLines!){lines.add(_DraftLine(row['variant_id'] as int,quantity:'${row['qty']}',price:rupees(row['rate']).toStringAsFixed(2),unit:'${row['sale_unit']}',factor:numVal(row['factor'])));}
       }else {lines.add(_DraftLine(variants.isEmpty?0:variants.first['id'] as int));}
     });
   }
@@ -461,7 +475,7 @@ class _InvoiceDialogState extends State<InvoiceDialog>{
     try{
       if(cash==null||products.isEmpty)throw const FormatException('Create a product and payment account first');
       setState(()=>submitting=true);
-      final items=lines.map((l)=>ItemLine(l.variant,double.parse(l.qty.text),double.parse(l.rate.text))).toList();
+      final items=lines.map((l)=>ItemLine(l.variant,double.parse(l.qty.text),double.parse(l.rate.text),unit:l.unit??products.firstWhere((p)=>p['id']==l.variant)['unit'] as String,factor:l.factor)).toList();
       if(widget.existingId!=null){await s.reviseDocument(widget.existingId!,widget.kind,party,date,items,double.parse(paid.text),cash!,notes:notes.text);}
       else{await s.postDocument(widget.kind,party,date,items,double.parse(paid.text),cash!,notes:notes.text);}
       if(mounted)Navigator.pop(context,true);
@@ -475,7 +489,7 @@ class _InvoiceDialogState extends State<InvoiceDialog>{
         const SizedBox(width:14),Expanded(child:TextFormField(key:ValueKey('invoiceDate-$date'),initialValue:date,decoration:const InputDecoration(labelText:'Date YYYY-MM-DD'),onChanged:(v)=>date=v))]),
       const SizedBox(height:18),const Text('Line items • each variation has independent stock',style:TextStyle(fontWeight:FontWeight.w700)),const SizedBox(height:10),
       for(final l in lines)Padding(padding:const EdgeInsets.only(bottom:9),child:Row(children:[
-        Expanded(flex:5,child:DropdownButtonFormField<int>(initialValue:l.variant==0?null:l.variant,isExpanded:true,decoration:const InputDecoration(labelText:'Product / SKU'),items:products.map((v)=>DropdownMenuItem(value:v['id'] as int,child:Text('${v['product']} | ${v['sku']} | stock ${v['qty']}',overflow:TextOverflow.ellipsis))).toList(),onChanged:(x)=>setState(()=>l.variant=x??0))),
+        Expanded(flex:5,child:DropdownButtonFormField<int>(initialValue:l.variant==0?null:l.variant,isExpanded:true,decoration:const InputDecoration(labelText:'Product / SKU'),items:products.map((v)=>DropdownMenuItem(value:v['id'] as int,child:Text('${v['product']} | ${v['sku']} | stock ${v['qty']}',overflow:TextOverflow.ellipsis))).toList(),onChanged:(x)=>setState((){l.variant=x??0;l.unit=null;l.factor=1;}))),
         const SizedBox(width:9),Expanded(flex:2,child:TextField(controller:l.qty,decoration:const InputDecoration(labelText:'Qty'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){}))),
         const SizedBox(width:9),Expanded(flex:2,child:TextField(controller:l.rate,decoration:InputDecoration(labelText:widget.kind=='sale'?'Manual Price':'Purchase Cost'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){}))),
         const SizedBox(width:9),SizedBox(width:93,child:Text(rs((double.tryParse(l.qty.text)??0)*(double.tryParse(l.rate.text)??0)),style:const TextStyle(fontSize:11,fontWeight:FontWeight.bold))),
@@ -488,7 +502,7 @@ class _InvoiceDialogState extends State<InvoiceDialog>{
     if(widget.existingId!=null)const Text('Saving updates this same invoice number and ID. Prior stock and ledger entries remain in audit history.',style:TextStyle(fontSize:11,color:Colors.blueGrey)),
     const Divider(),Row(children:[Text('Grand Total    ${rs(total)}',style:const TextStyle(fontSize:21,color:ink,fontWeight:FontWeight.w900)),const Spacer(),TextButton(onPressed:()=>Navigator.pop(context),child:const Text('Cancel')),const SizedBox(width:12),FilledButton.icon(onPressed:submitting?null:submit,icon:const Icon(Icons.check),label:Text(submitting?'Saving…':'Post & Update Stock'))])]))));}
 }
-class _DraftLine {int variant;final qty=TextEditingController();final rate=TextEditingController();_DraftLine(this.variant,{String quantity='1',String price='0'}){qty.text=quantity;rate.text=price;}void dispose(){qty.dispose();rate.dispose();}}
+class _DraftLine {int variant;String? unit;double factor;final qty=TextEditingController();final rate=TextEditingController();_DraftLine(this.variant,{String quantity='1',String price='0',this.unit,this.factor=1}){qty.text=quantity;rate.text=price;}void dispose(){qty.dispose();rate.dispose();}}
 
 class PartiesScreen extends StatefulWidget {final String kind;final VoidCallback onChange;const PartiesScreen({super.key,required this.kind,required this.onChange});@override State<PartiesScreen> createState()=>_PartiesScreenState();}
 class _PartiesScreenState extends State<PartiesScreen>{final s=Store.instance;
@@ -605,6 +619,32 @@ class _EmployeeScreenState extends State<EmployeeScreen>{final s=Store.instance;
 
 class AccountsScreen extends StatefulWidget {final VoidCallback onChange;const AccountsScreen({super.key,required this.onChange});@override State<AccountsScreen> createState()=>_AccountsScreenState();}
 class _AccountsScreenState extends State<AccountsScreen>{final s=Store.instance;
+  Future<void> addPaymentAccount()async {
+    final f=await ask(context,'Add POS Payment Account',[
+      const FieldSpec('code','Unique account code (e.g. 1020)'),
+      const FieldSpec('name','Account name (e.g. JazzCash / HBL)'),
+      FieldSpec('kind','Payment method',choices:const {1:'Cash',2:'Bank',3:'Wallet'})]);
+    if(f!=null){final kind=const {'1':'cash','2':'bank','3':'wallet'}[f['kind']]!;
+      await s.addPaymentAccount(f['code']!,f['name']!,kind);}
+  }
+  Future<void> viewAccountLedger(Map<String,Object?> account)async {
+    final rows=await s.read('''SELECT j.date,j.source_type,j.note,l.debit,l.credit,j.id AS journal_id FROM journal_lines l
+      JOIN journal j ON j.id=l.journal_id WHERE l.account_id=? ORDER BY j.date,j.id,l.id''',[account['id']]);
+    int running=0;
+    final display=<List<String>>[];
+    for(final r in rows){running+=(r['debit'] as int)-(r['credit'] as int);
+      display.add(['${r['date']}','${r['source_type']} #${r['journal_id']}','${r['note']}',funds(r['debit']),funds(r['credit']),funds(running)]);
+    }
+    if(!mounted)return;
+    final report=ReportResult('Account Ledger: ${account['name']}',const ['Date','Source','Reference','Debit','Credit','Balance'],display);
+    await showDialog<void>(context:context,builder:(ctx)=>AlertDialog(title:Text('Ledger: ${account['name']}'),
+      content:SizedBox(width:850,height:450,child:SingleChildScrollView(child:listing(report.headings,report.rows.map((r)=>r.map((v)=>txt(v)).toList()).toList()))),
+      actions:[TextButton(onPressed:()=>Exports.excel(report),child:const Text('Excel')),
+        TextButton(onPressed:()=>Exports.pdf(report),child:const Text('PDF')),
+        TextButton(onPressed:()=>Exports.pdf(report,print:true),child:const Text('A4 Print')),
+        FilledButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))]));
+  }
+
   Future<void> change(Future<void> Function() f)async{try{await f();widget.onChange();}catch(e){if(mounted)await showError(context,e);}}
   Future<void> transfer()async{final ac=await accountChoices(s);if(!mounted)return;
     final f=await ask(context,'Cash / bank transfer',[FieldSpec('from','From',choices:ac),FieldSpec('to','To',choices:ac),const FieldSpec('amount','Amount Rs.',numeric:true),const FieldSpec('note','Note',mustFill:false)]);
@@ -615,11 +655,11 @@ class _AccountsScreenState extends State<AccountsScreen>{final s=Store.instance;
     if(f!=null)await s.manualJournal(f['date']!,int.parse(f['debit']!),int.parse(f['credit']!),double.parse(f['amount']!),f['note']!);
   }
   @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read('''SELECT a.id,a.code,a.name,a.type,coalesce(sum(jl.debit-jl.credit),0) AS dr_balance FROM accounts a LEFT JOIN journal_lines jl ON jl.account_id=a.id GROUP BY a.id ORDER BY a.code'''),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
-    return pageWrap([section('Chart of accounts',action:buttons([addButton('Add account',()=>change(()async{
+    return pageWrap([section('Chart of accounts',action:buttons([addButton('Add POS payment account',()=>change(addPaymentAccount)),addButton('Add account',()=>change(()async{
       final f=await ask(context,'Add account',[const FieldSpec('code','Code'),const FieldSpec('name','Account name'),const FieldSpec('type','Type: asset / liability / equity / revenue / expense')]);
       if(f!=null){if(!{'asset','liability','equity','revenue','expense'}.contains(f['type']))throw const FormatException('Invalid account type');await s.db.rawInsert('INSERT INTO accounts(code,name,type) VALUES(?,?,?)',[f['code'],f['name'],f['type']]);}
     })),addButton('Cash / bank transfer',()=>change(transfer)),addButton('Manual journal',()=>change(manual))])),
-      listing(['Code','Account','Type','Net Dr balance'],snap.data!.map((a)=>[txt(a['code']),txt(a['name']),txt(a['type']),txt(funds(a['dr_balance']))]).toList()),
+      listing(['Code','Account','Type','Net Dr balance','Ledger'],snap.data!.map((a)=>[txt(a['code']),txt(a['name']),txt(a['type']),txt(funds(a['dr_balance'])),small('View Ledger',()=>viewAccountLedger(a),icon:Icons.menu_book)]).toList()),
       panel(const Text('Accounting journal posts are atomic with bills, supplier purchases, customer receipts, expenses, advances and payroll. Stock costing / full financial closing remain under development.',style:TextStyle(color:Colors.blueGrey,fontSize:12)))]);
   });
 }

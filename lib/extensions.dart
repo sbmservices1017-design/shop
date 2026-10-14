@@ -87,8 +87,10 @@ extension ShopDeskExtendedOperations on Store {
         final l=source[e.key]!;
         await t.rawInsert('INSERT INTO return_lines(return_id,source_line_id,variant_id,qty,amount) VALUES(?,?,?,?,?)',
           [id,e.key,l['variant_id'],e.value,((l['rate'] as int)*e.value).round()]);
+        final unitFactors=await t.rawQuery('SELECT factor FROM document_line_units WHERE line_id=?',[e.key]);
+        final factor=unitFactors.isEmpty?1.0:numVal(unitFactors.first['factor']);
         await t.rawInsert('INSERT INTO stock_movements(variant_id,qty,source_type,source_id,date,note) VALUES(?,?,?,?,?,?)',
-          [l['variant_id'],e.value*(kind=='sale'?1:-1),'${kind}_return',id,date,reason]);
+          [l['variant_id'],e.value*factor*(kind=='sale'?1:-1),'${kind}_return',id,date,reason]);
       }
       if(party!=null){
         await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note) VALUES(?,?,?,?,?,?,?)',
@@ -122,7 +124,7 @@ extension ShopDeskExtendedOperations on Store {
     final movements=await t.rawQuery('SELECT * FROM return_lines WHERE return_id=?',[returnId]);
     for(final l in movements){
       await t.rawInsert('INSERT INTO stock_movements(variant_id,qty,source_type,source_id,date,note) VALUES(?,?,?,?,?,?)',
-        [l['variant_id'],-numVal(l['qty'])*(kind=='sale'?1:-1),'void_${kind}_return',returnId,date,'Return voided']);
+        [l['variant_id'],-numVal(l['qty'])*(kind=='sale'?1:-1)*numVal((await t.rawQuery('SELECT coalesce(u.factor,1) AS factor FROM document_lines dl LEFT JOIN document_line_units u ON u.line_id=dl.id WHERE dl.id=?',[l['source_line_id']])).first['factor']),'void_${kind}_return',returnId,date,'Return voided']);
     }
     final ledgers=await t.rawQuery('SELECT * FROM party_ledger WHERE source_id=? AND source_type IN (?,?)',
       [returnId,'${kind}_return','${kind}_return_refund']);
