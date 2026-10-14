@@ -233,7 +233,7 @@ Widget small(String s,VoidCallback tap,{IconData icon=Icons.edit_outlined}){
 }
 Future<Map<int,String>> options(Store s,String query,[List<Object?> args=const []]) async => {for(final x in await s.read(query,args))x['id'] as int:'${x['name']}'};
 Future<Map<int,String>> variants(Store s) async => {for(final x in await s.stock())x['id'] as int:'${x['product']} • ${x['sku']} (${x['unit']})'};
-Future<Map<int,String>> accountChoices(Store s)=>options(s,"SELECT a.id,a.name FROM accounts a JOIN payment_accounts p ON p.account_id=a.id WHERE a.active=1 ORDER BY a.name");
+Future<Map<int,String>> accountChoices(Store s)=>s.paymentAccountOptions();
 
 class Dashboard extends StatelessWidget {
   final int revision;const Dashboard({super.key,required this.revision});
@@ -549,12 +549,20 @@ class _EmployeeScreenState extends State<EmployeeScreen>{final s=Store.instance;
 class AccountsScreen extends StatefulWidget {final VoidCallback onChange;const AccountsScreen({super.key,required this.onChange});@override State<AccountsScreen> createState()=>_AccountsScreenState();}
 class _AccountsScreenState extends State<AccountsScreen>{final s=Store.instance;
   Future<void> addPaymentAccount()async {
-    final f=await ask(context,'Add POS Payment Account',[
-      const FieldSpec('code','Unique account code (e.g. 1020)'),
-      const FieldSpec('name','Account name (e.g. JazzCash / HBL)'),
+    final f=await ask(context,'Add POS Payment Account (ID auto-generated)',[
+      const FieldSpec('name','Account name (e.g. HBL / JazzCash)'),
+      const FieldSpec('holder','Account holder name'),
       FieldSpec('kind','Payment method',choices:const {1:'Cash',2:'Bank',3:'Wallet'})]);
     if(f!=null){final kind=const {'1':'cash','2':'bank','3':'wallet'}[f['kind']]!;
-      await s.addPaymentAccount(f['code']!,f['name']!,kind);}
+      await s.addPaymentAccount('',f['name']!,kind,holderName:f['holder']!);}
+  }
+  Future<void> editPaymentAccount(Map<String,Object?> a) async {
+    final f=await ask(context,'Edit Payment Account · ${a['code']}',[
+      FieldSpec('name','Account name',initial:'${a['name']}'),
+      FieldSpec('holder','Account holder name',initial:'${a['holder_name']??''}',mustFill:false),
+    ]);
+    if(f!=null){await s.updatePaymentAccountDetails(a['id'] as int,
+      name:f['name']!,holderName:f['holder']!);}
   }
   Future<void> viewAccountLedger(Map<String,Object?> account)async {
     final rows=await s.read('''SELECT j.date,j.source_type,j.note,l.debit,l.credit,j.id AS journal_id FROM journal_lines l
@@ -565,8 +573,8 @@ class _AccountsScreenState extends State<AccountsScreen>{final s=Store.instance;
       display.add(['${r['date']}','${r['source_type']} #${r['journal_id']}','${r['note']}',funds(r['debit']),funds(r['credit']),funds(running)]);
     }
     if(!mounted)return;
-    final report=ReportResult('Account Ledger: ${account['name']}',const ['Date','Source','Reference','Debit','Credit','Balance'],display);
-    await showDialog<void>(context:context,builder:(ctx)=>AlertDialog(title:Text('Ledger: ${account['name']}'),
+    final report=ReportResult('Account Ledger: ${paymentAccountLabel(account)}',const ['Date','Source','Reference','Debit','Credit','Balance'],display);
+    await showDialog<void>(context:context,builder:(ctx)=>AlertDialog(title:Text('Ledger: ${paymentAccountLabel(account)}'),
       content:SizedBox(width:850,height:450,child:SingleChildScrollView(child:listing(report.headings,report.rows.map((r)=>r.map((v)=>txt(v)).toList()).toList()))),
       actions:[TextButton(onPressed:()=>Exports.excel(report),child:const Text('Excel')),
         TextButton(onPressed:()=>Exports.pdf(report),child:const Text('PDF')),
@@ -583,12 +591,23 @@ class _AccountsScreenState extends State<AccountsScreen>{final s=Store.instance;
     final f=await ask(context,'Manual journal entry',[FieldSpec('date','Entry Date',initial:nowDate()),FieldSpec('debit','Debit account',choices:ac),FieldSpec('credit','Credit account',choices:ac),const FieldSpec('amount','Amount Rs.',numeric:true),const FieldSpec('note','Notes / reference',mustFill:false)]);
     if(f!=null)await s.manualJournal(f['date']!,int.parse(f['debit']!),int.parse(f['credit']!),double.parse(f['amount']!),f['note']!);
   }
-  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read('''SELECT a.id,a.code,a.name,a.type,coalesce(sum(jl.debit-jl.credit),0) AS dr_balance FROM accounts a LEFT JOIN journal_lines jl ON jl.account_id=a.id GROUP BY a.id ORDER BY a.code'''),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
+  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read('''SELECT a.id,a.code,a.name,a.type,pa.holder_name,pa.kind,
+    coalesce(sum(jl.debit-jl.credit),0) AS dr_balance FROM accounts a
+    LEFT JOIN journal_lines jl ON jl.account_id=a.id
+    LEFT JOIN payment_accounts pa ON pa.account_id=a.id
+    GROUP BY a.id ORDER BY a.code'''),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
     return pageWrap([section('Chart of accounts',action:buttons([addButton('Add POS payment account',()=>change(addPaymentAccount)),addButton('Add account',()=>change(()async{
-      final f=await ask(context,'Add account',[const FieldSpec('code','Code'),const FieldSpec('name','Account name'),const FieldSpec('type','Type: asset / liability / equity / revenue / expense')]);
-      if(f!=null){if(!{'asset','liability','equity','revenue','expense'}.contains(f['type']))throw const FormatException('Invalid account type');await s.db.rawInsert('INSERT INTO accounts(code,name,type) VALUES(?,?,?)',[f['code'],f['name'],f['type']]);}
+      final f=await ask(context,'Add Ledger Account (ID auto-generated)',[
+        const FieldSpec('name','Account name'),
+        const FieldSpec('type','Account type (asset / liability / equity / revenue / expense)')]);
+      if(f!=null)await s.addLedgerAccount(f['name']!,f['type']!.toLowerCase());
     })),addButton('Cash / bank transfer',()=>change(transfer)),addButton('Manual journal',()=>change(manual))])),
-      listing(['Code','Account','Type','Net Dr balance','Ledger'],snap.data!.map((a)=>[txt(a['code']),txt(a['name']),txt(a['type']),txt(funds(a['dr_balance'])),small('View Ledger',()=>viewAccountLedger(a),icon:Icons.menu_book)]).toList()),
+      listing(['Auto ID / Code','Account','Account holder','Type','Net Dr balance','Actions'],snap.data!.map((a)=>[
+        txt(a['code']),txt(a['name']),txt(a['holder_name']??'—'),txt(a['kind']??a['type']),
+        txt(funds(a['dr_balance'])),buttons([
+          small('View Ledger',()=>viewAccountLedger(a),icon:Icons.menu_book),
+          if(a['kind']!=null)small('Edit holder / account',()=>change(()=>editPaymentAccount(a)),icon:Icons.edit_outlined)
+        ])]).toList()),
       panel(const Text('Accounting journal posts are atomic with bills, supplier purchases, customer receipts, expenses, advances and payroll. Stock costing / full financial closing remain under development.',style:TextStyle(color:Colors.blueGrey,fontSize:12)))]);
   });
 }

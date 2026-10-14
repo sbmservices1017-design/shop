@@ -103,13 +103,12 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
   }
   Future<void> _addVariation(int productId)async{
     final form=GlobalKey<FormState>();
-    final fields={for(final name in ['size','color','design','quality','packSize','gazzPerRoll','sheetGazz','opening'])name:TextEditingController()};
+    final fields={for(final name in ['size','color','design','quality','packSize','gazzPerRoll','sheetsPerRoll','opening'])name:TextEditingController()};
     fields['packSize']!.text='1';
     fields['gazzPerRoll']!.text='30';
-    fields['sheetGazz']!.text='2';
+    fields['sheetsPerRoll']!.text='20';
     fields['opening']!.text='0';
     String packing='piece';
-    bool tableSheet=false;
     String packLabel()=>switch(packing){
       'set'=>'Pieces in one Set',
       'packet'=>'Pieces in one Packet',
@@ -117,6 +116,7 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
     };
     String openingLabel()=>switch(packing){
       'roll'=>'Roll quantity',
+      'table_sheet_roll'=>'Roll quantity',
       'set'=>'Set quantity',
       'packet'=>'Packet quantity',
       _=>'Piece quantity',
@@ -136,10 +136,10 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
             items:const [DropdownMenuItem(value:'piece',child:Text('Pieces')),
               DropdownMenuItem(value:'set',child:Text('Set (3, 5, 7, 9 or any number)')),
               DropdownMenuItem(value:'packet',child:Text('Packet (sell loose Pieces too)')),
-              DropdownMenuItem(value:'roll',child:Text('Roll (sell Feet / Gazz / Table Sheet)'))],
+              DropdownMenuItem(value:'roll',child:Text('Roll (sell Feet / Gazz)')),
+              DropdownMenuItem(value:'table_sheet_roll',child:Text('Table Sheet Roll (sell individual Sheets)'))],
             onChanged:(v){if(v==null)return;setModal((){
               packing=v;
-              tableSheet=false;
               fields['packSize']!.text=switch(v){'set'=>'3','packet'=>'12',_=>'1'};
             });}),
           if(packing=='set'||packing=='packet') ...[
@@ -150,6 +150,18 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
             const SizedBox(height:8),Wrap(spacing:7,runSpacing:6,children:[for(final size in [3,5,7,9,12])
               ActionChip(label:Text('$size Pieces'),onPressed:()=>setModal(()=>fields['packSize']!.text='$size'))]),
           ],
+          if(packing=='table_sheet_roll') ...[
+            const SizedBox(height:12),TextFormField(controller:fields['sheetsPerRoll'],
+              keyboardType:const TextInputType.numberWithOptions(decimal:false),
+              onChanged:(_)=>setModal((){}),
+              decoration:const InputDecoration(labelText:'How many Table Sheets in one Roll?',
+                helperText:'Example: 1 Roll = 20 Table Sheets (no Gazz/Feet calculation)'),
+              validator:(s){final n=int.tryParse(s?.trim()??'');
+                return n==null||n<1||n>1000000?'Enter number of Sheets per Roll':null;}),
+            const SizedBox(height:7),Align(alignment:Alignment.centerLeft,
+              child:Text('1 Roll = ${int.tryParse(fields['sheetsPerRoll']!.text)??0} Table Sheets',
+                style:const TextStyle(color:Color(0xFF1D68B2),fontWeight:FontWeight.w700))),
+          ],
           if(packing=='roll') ...[
             const SizedBox(height:12),TextFormField(controller:fields['gazzPerRoll'],
               keyboardType:const TextInputType.numberWithOptions(decimal:true),
@@ -159,16 +171,6 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
             const SizedBox(height:8),Align(alignment:Alignment.centerLeft,child:Text(
               '1 Roll = ${((double.tryParse(fields['gazzPerRoll']!.text)??0)*3).toStringAsFixed(2)} Feet',
               style:const TextStyle(color:Color(0xFF1D68B2),fontWeight:FontWeight.w700))),
-            const SizedBox(height:8),CheckboxListTile(contentPadding:EdgeInsets.zero,
-              title:const Text('Sell this Roll as Table Sheets too'),
-              subtitle:const Text('Enter how many Gazz are cut for 1 Table Sheet'),
-              value:tableSheet,onChanged:(v)=>setModal(()=>tableSheet=v??false)),
-            if(tableSheet)TextFormField(controller:fields['sheetGazz'],
-              keyboardType:const TextInputType.numberWithOptions(decimal:true),
-              decoration:const InputDecoration(labelText:'Gazz used for 1 Table Sheet',helperText:'Example: 2 Gazz = 6 Feet per Table Sheet'),
-              validator:(s){final n=double.tryParse(s?.trim()??'');
-                final roll=double.tryParse(fields['gazzPerRoll']!.text)??0;
-                return n==null||!n.isFinite||n<=0||n>roll?'Enter a valid cut length not exceeding the Roll':null;}),
           ],
           const SizedBox(height:13),TextFormField(controller:fields['opening'],
             keyboardType:const TextInputType.numberWithOptions(decimal:true),
@@ -180,7 +182,8 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
           const SizedBox(height:12),Container(width:double.infinity,padding:const EdgeInsets.all(10),
             decoration:BoxDecoration(color:const Color(0xFFEDF6FF),borderRadius:BorderRadius.circular(9)),
             child:Text(switch(packing){
-              'roll'=>'Purchase in Rolls; sale in Feet, Gazz${tableSheet?', Table Sheets':''} or Rolls. Stock updates in Feet.',
+              'roll'=>'Purchase in Rolls; sell in Feet or Gazz. Stock updates in Feet.',
+              'table_sheet_roll'=>'Purchase in Rolls; sell Table Sheets individually or whole Rolls. Stock updates in Sheets.',
               'set'=>'Buy Sets; sell whole Sets or loose Pieces.',
               'packet'=>'Buy Packets; sell Packets or loose Pieces.',
               _=>'Each Size / Color variation has separate Piece stock.'},
@@ -188,7 +191,7 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
         ]))),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Cancel')),
           FilledButton(onPressed:(){if(form.currentState!.validate())Navigator.pop(ctx,{
             for(final e in fields.entries)e.key:e.value.text.trim(),
-            'packing':packing,'tableSheet':tableSheet?'yes':'no',
+            'packing':packing,
           });},child:const Text('Save Variation'))])));
       if(values!=null){
         final roll=values['packing']=='roll';
@@ -196,7 +199,7 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
           size:values['size']!,color:values['color']!,design:values['design']!,quality:values['quality']!,
           packing:values['packing']!,packSize:roll?1:double.parse(values['packSize']!),
           rollGazz:roll?double.parse(values['gazzPerRoll']!):null,
-          tableSheetGazz:values['tableSheet']=='yes'?double.parse(values['sheetGazz']!):null,
+          sheetsPerRoll:values['packing']=='table_sheet_roll' ? int.parse(values['sheetsPerRoll']!) : null,
           openingPacks:double.parse(values['opening']!));
       }
     }finally{for(final controller in fields.values){controller.dispose();}}
@@ -221,7 +224,7 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
       ('${p['name']} ${p['category']}'.toLowerCase().contains(search.trim().toLowerCase()))).toList();
     return Padding(padding:const EdgeInsets.all(23),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
       const Text('Products & Variations',style:TextStyle(fontSize:25,fontWeight:FontWeight.w800)),const SizedBox(height:6),
-      const Text('Category → Product → Variation. Select Roll, Set, Packet or Piece; POS converts automatically.',style:TextStyle(color:Colors.blueGrey)),
+      const Text('Category → Product → Variation. Set, Packet, Roll or Table Sheet Roll; POS converts automatically.',style:TextStyle(color:Colors.blueGrey)),
       const SizedBox(height:15),Wrap(spacing:12,runSpacing:10,children:[
         SizedBox(width:260,child:TextField(decoration:const InputDecoration(prefixIcon:Icon(Icons.search),labelText:'Search products'),onChanged:(v)=>setState(()=>search=v))),
         SizedBox(width:230,child:DropdownButtonFormField<int?>(key:ValueKey(filterCategory),initialValue:filterCategory,
@@ -253,7 +256,7 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
           for(final v in pvars)ListTile(dense:true,
             leading:const CircleAvatar(radius:17,child:Icon(Icons.style_outlined,size:17)),
             title:Text(('${v['attrs']??''}').trim().isEmpty?'Standard':'${v['attrs']}',style:const TextStyle(fontWeight:FontWeight.w600)),
-            subtitle:Text('Stock: ${numVal(v['qty']).toStringAsFixed(numVal(v['qty'])%1==0?0:2)} ${v['unit']=='ft'?'Feet':'Pieces'} • ${v['package']??'Single Piece'}'),
+            subtitle:Text('Stock: ${numVal(v['qty']).toStringAsFixed(numVal(v['qty'])%1==0?0:2)} ${v['display_unit']=='Table Sheets'?'Table Sheets':v['unit']=='ft'?'Feet':'Pieces'} • ${v['package']??'Single Piece'}'),
             trailing:Wrap(children:[IconButton(tooltip:'Edit Size/Color',onPressed:allow('edit')?()=>_run(()=>_editVariation(v['id'] as int)):null,icon:const Icon(Icons.edit_outlined)),
               IconButton(tooltip:'Archive variation',onPressed:allow('delete')?()=>_run(()async{await store.archive('variants',v['id'] as int);}):null,icon:const Icon(Icons.archive_outlined))]),
           )

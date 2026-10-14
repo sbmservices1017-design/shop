@@ -80,6 +80,39 @@ void main(){
     expect(numVal((await s.stock()).firstWhere((r)=>r['id']==vid)['qty']),0);
   });
 
+  test('auto payment IDs are unique, holder visible in POS, edits preserve ledger',()async{
+    final first=await s.addPaymentAccount('','Meezan Bank','bank',holderName:'Ahmad Shah');
+    final second=await s.addPaymentAccount('','JazzCash','wallet',holderName:'Ali Khan');
+    final rows=await s.read('''SELECT a.id,a.code,a.name,p.holder_name
+      FROM accounts a JOIN payment_accounts p ON p.account_id=a.id
+      WHERE a.id IN (?,?) ORDER BY a.id''',[first,second]);
+    expect(rows.length,2);
+    final code1='${rows.first['code']}';
+    final code2='${rows.last['code']}';
+    expect(code1,matches(RegExp(r'^PAY-[0-9]{6,}$')));
+    expect(code2,matches(RegExp(r'^PAY-[0-9]{6,}$')));
+    expect(code1,isNot(code2));
+    final options=await s.paymentAccountOptions();
+    expect(options[first],contains('Meezan Bank'));
+    expect(options[first],contains('Ahmad Shah'));
+    expect(options[first],contains(code1));
+    final cat=await s.addCategory('Account Holder Test');
+    final product=await s.addProduct(cat,'Payment Example Product');
+    final variant=await s.addVariant(product,'PAY-TEST-SKU','pcs',{},0);
+    final party=await s.addParty('customer','Payment Test Customer','','');
+    final sale=await s.postDocument('sale',party,nowDate(),[ItemLine(variant,1,500)],500,first);
+    await s.updatePaymentAccountDetails(first,name:'Meezan Current',holderName:'New Holder');
+    final changed=await s.paymentAccountOptions();
+    expect(changed[first],contains('New Holder'));
+    expect(changed[first],contains(code1));
+    final ledger=await s.read('''SELECT count(*) AS count FROM journal_lines l
+      JOIN journal j ON j.id=l.journal_id
+      WHERE l.account_id=? AND j.source_type='sale' AND j.source_id=?''',[first,sale]);
+    expect(ledger.first['count'],greaterThan(0));
+    await s.voidDocument(sale);
+    await expectLater(s.addPaymentAccount('','   ','bank'),throwsFormatException);
+  });
+
   test('employee advance and payroll are reflected in ledger',()async{
     final cash=(await s.read("SELECT id FROM accounts WHERE code='1000'")).first['id'] as int;
     final e=await s.addEmployee('Team Member','Shop assistant',30000);

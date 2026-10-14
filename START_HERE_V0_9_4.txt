@@ -1,0 +1,18 @@
+ShopDesk Pro v0.9.4 - READY-MADE TABLE SHEET ROLL
+
+New variation in Products > Add Variation:
+- Table Sheet Roll (sell individual Sheets)
+- Default: 1 Roll = 20 Table Sheets (editable)
+- Roll Quantity = how many Rolls are in stock
+
+Example: 2 Rolls x 20 Sheets = 40 Table Sheets.
+POS Purchase: choose Roll, qty 1 -> stock +20 Table Sheets.
+POS Sale: choose Table Sheet, qty 7 -> stock -7 Table Sheets.
+POS can also sell full Rolls if required.
+No Feet/Gazz fields for this ready-made variation.
+
+The original Roll-by-Gazz variation is separate and unchanged.
+Other ShopDesk modules retained.
+
+To build: unzip, upload CONTENTS of ShopDesk folder to GitHub repository root (including hidden .github), commit and run Windows Actions workflow.
+Flutter analyzer, tests and Windows compilation are NOT verified here.

@@ -1,0 +1,13 @@
+ShopDesk Pro v0.9.5 — POS Payment Accounts update
+
+1. Accounts > Add POS payment account
+2. Enter Account Name, Account Holder Name, and Cash/Bank/Wallet.
+3. Software automatically assigns a unique code such as PAY-000001. General ledger accounts get GL-000001.
+4. In Accounts listing the code and holder are shown; holder can be edited.
+5. Sales/Purchases POS and payment dialogs show Account • Holder • ID.
+6. Existing Cash (1000) and Bank (1010) account codes are preserved.
+7. Existing SQLite databases safely add the holder_name column during startup.
+8. Keep your working EXE and SQLite backup until the new GitHub Windows build and tests succeed.
+
+Important: Auto ID is an internal ShopDesk account reference, not a bank account number.
+The customer must provide the real bank account holder name.

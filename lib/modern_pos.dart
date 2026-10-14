@@ -32,18 +32,27 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
   Future<void> load()async{
     final c=await store.stock();
     final p=await store.read('SELECT id,name FROM parties WHERE kind=? AND active=1 ORDER BY name',[sale?'customer':'supplier']);
-    final a=await store.read('SELECT a.id,a.name FROM accounts a JOIN payment_accounts pa ON pa.account_id=a.id WHERE a.active=1 ORDER BY a.name');
+    final a=await store.paymentAccountOptions();
     final conversions=await store.read('SELECT variant_id,unit,factor,can_buy,can_sell FROM variant_units');
     final unitMap=<int,List<Map<String,Object?>>>{};
     for(final variant in c){
       final id=variant['id'] as int;
-      unitMap[id]=[{'unit':'${variant['unit']}','factor':1.0},
-        ...conversions.where((x)=>x['variant_id']==id && (sale?x['can_sell']:x['can_buy'])==1 && '${x['unit']}'.toLowerCase()!='${variant['unit']}'.toLowerCase())];
+      final extras=conversions.where((x)=>x['variant_id']==id &&
+          (sale?x['can_sell']:x['can_buy'])==1 &&
+          '${x['unit']}'.toLowerCase()!='${variant['unit']}'.toLowerCase()).toList();
+      final finishedSheetRoll='${variant['unit']}'.toLowerCase()=='pcs' &&
+          conversions.any((x)=>x['variant_id']==id &&
+            '${x['unit']}'.toLowerCase()=='table sheet' &&
+            numVal(x['factor'])==1);
+      // For ready-made Table Sheet Rolls, show only "Roll" at purchase and
+      // "Table Sheet" / "Roll" at sale. No confusing "Piece" or Gazz.
+      unitMap[id]=finishedSheetRoll ? extras : [
+        {'unit':'${variant['unit']}','factor':1.0},...extras];
     }
     if(!mounted)return;
     setState((){
       catalog=c;availableUnits=unitMap;parties={for(final x in p)x['id'] as int:'${x['name']}'};
-      accounts={for(final x in a)x['id'] as int:'${x['name']}'};
+      accounts=a;
       accountId??=accounts.isEmpty?null:accounts.keys.first;
       if(!sale)partyId??=parties.isEmpty?null:parties.keys.first;
     });
@@ -86,7 +95,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
                   : '${v['attrs']} · ${v['package']??'Piece'}',overflow:TextOverflow.ellipsis))).toList(),
               onChanged:(v){if(v!=null)setModal(()=>selectedId=v);}),
             const SizedBox(height:12),Align(alignment:Alignment.centerLeft,
-              child:Text('Stock: ${numVal(selected['qty']).toStringAsFixed(2)} ${shopUnit('${selected['unit']}')}',
+              child:Text('Stock: ${numVal(selected['qty']).toStringAsFixed(2)} ${selected['display_unit']??shopUnit('${selected['unit']}')}',
                 style:const TextStyle(fontWeight:FontWeight.w600,color:Color(0xFF1D68B2)))),
           ])),
           actions:[TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Cancel')),
@@ -153,12 +162,12 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
         items:(availableUnits[row.product['id'] as int]??[{'unit':row.unit,'factor':1.0}])
             .map((u)=>DropdownMenuItem(value:'${u['unit']}',child:Text(shopUnit('${u['unit']}')))).toList(),
         onChanged:(v){if(v!=null)changeCartUnit(row,v);}),
-      const SizedBox(height:3),Text('Stock: ${(double.tryParse(row.qty.text)??0)*(double.tryParse(row.factor.text)??0)} ${shopUnit('${row.product['unit']}')}',
+      const SizedBox(height:3),Text('Stock: ${(double.tryParse(row.qty.text)??0)*(double.tryParse(row.factor.text)??0)} ${row.product['display_unit']??shopUnit('${row.product['unit']}')}',
           style:const TextStyle(color:Colors.blueGrey,fontSize:11)),
       const SizedBox(height:6),Row(children:[Expanded(child:TextField(controller:row.qty,decoration:const InputDecoration(labelText:'Quantity'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){}))),const SizedBox(width:8),Expanded(child:TextField(controller:row.price,decoration:InputDecoration(labelText:'${sale?'Selling':'Purchase'} price per ${shopUnit(row.unit)}'),keyboardType:TextInputType.number,onChanged:(_)=>setState((){})))]),const SizedBox(height:5),Align(alignment:Alignment.centerRight,child:Text(money((double.tryParse(row.qty.text)??0)*(double.tryParse(row.price.text)??0)),style:const TextStyle(fontWeight:FontWeight.bold)))
     ])))])),const Divider(),
     DropdownButtonFormField<int?>(value:partyId,isExpanded:true,decoration:InputDecoration(labelText:sale?'Customer':'Supplier'),items:[if(sale)const DropdownMenuItem<int?>(value:null,child:Text('Walk-in (fully paid only)')),...parties.entries.map((e)=>DropdownMenuItem<int?>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis)))],onChanged:(v)=>setState(()=>partyId=v)),const SizedBox(height:8),
-    DropdownButtonFormField<int>(value:accountId,decoration:const InputDecoration(labelText:'Payment account'),items:accounts.entries.map((e)=>DropdownMenuItem<int>(value:e.key,child:Text(e.value))).toList(),onChanged:(v)=>setState(()=>accountId=v)),const SizedBox(height:8),
+    DropdownButtonFormField<int>(value:accountId,isExpanded:true,decoration:const InputDecoration(labelText:'Payment account · Holder · ID'),items:accounts.entries.map((e)=>DropdownMenuItem<int>(value:e.key,child:Text(e.value,overflow:TextOverflow.ellipsis))).toList(),onChanged:(v)=>setState(()=>accountId=v)),const SizedBox(height:8),
     Row(children:[Expanded(child:TextFormField(initialValue:date,decoration:const InputDecoration(labelText:'Invoice date YYYY-MM-DD'),onChanged:(v)=>date=v)),const SizedBox(width:8),Expanded(child:TextField(controller:notes,decoration:const InputDecoration(labelText:'Notes (optional)')))]),const SizedBox(height:8),
     Row(children:[Expanded(child:TextField(controller:paid,keyboardType:TextInputType.number,decoration:const InputDecoration(labelText:'Paid now (Rs.)'),onChanged:(_)=>setState((){}))),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.end,children:[const Text('Total amount',style:TextStyle(color:Colors.blueGrey,fontSize:11)),Text(money(total),style:const TextStyle(fontWeight:FontWeight.w900,fontSize:20)),Text('Balance: ${money(total-payment)}',style:const TextStyle(fontSize:11))]))]),
     if(error!=null)Padding(padding:const EdgeInsets.all(7),child:Text(error!,style:const TextStyle(color:Colors.red,fontSize:12))),const SizedBox(height:9),

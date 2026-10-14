@@ -1,1 +1,1 @@
-SHOPDESK_PRO_v0.9.3_SIMPLE_CATALOG_AND_POS
+ShopDesk Pro v0.9.5 - Payment Account Holder + Automatic Unique Account ID

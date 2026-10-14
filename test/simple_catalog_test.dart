@@ -76,6 +76,47 @@ void main(){
     expect(numVal((await store.stock()).firstWhere((r)=>r['id']==variant)['qty']),180);
   });
 
+  test('ready-made Table Sheet Roll has its OWN variation and 20 Sheets per Roll',()async{
+    final category=await store.addCategory('Table Cloth - Ready Made');
+    final product=await store.addProduct(category,'Ready-made Dining Sheets');
+    final variant=await store.createSimpleVariant(
+      productId:product,color:'Red',size:'Standard',packing:'table_sheet_roll',
+      packSize:1,sheetsPerRoll:20,openingPacks:2);
+    // 2 full Rolls = 40 separate, ready-made Table Sheets.
+    expect(numVal((await store.stock()).firstWhere((r)=>r['id']==variant)['qty']),40);
+    final saleUnits=await store.unitOptions(variant,sale:true);
+    final buyingUnits=await store.unitOptions(variant,sale:false);
+    expect(saleUnits.any((u)=>u['unit']=='table sheet'&&numVal(u['factor'])==1),true);
+    expect(saleUnits.any((u)=>u['unit']=='roll'&&numVal(u['factor'])==20),true);
+    expect(saleUnits.any((u)=>u['unit']=='gazz'||u['unit']=='ft'),false);
+    expect(buyingUnits.any((u)=>u['unit']=='roll'&&numVal(u['factor'])==20),true);
+    expect(buyingUnits.any((u)=>u['unit']=='table sheet'),false);
+    final customer=await store.addParty('customer','Sheet Customer','','');
+    final supplier=await store.addParty('supplier','Sheet Supplier','','');
+    final cash=(await store.read("SELECT id FROM accounts WHERE code='1000'")).first['id'] as int;
+    final sale=await store.postDocument('sale',customer,nowDate(),[
+      ItemLine(variant,7,125,unit:'table sheet',factor:1),
+    ],0,cash);
+    expect(numVal((await store.stock()).firstWhere((r)=>r['id']==variant)['qty']),33);
+    final purchase=await store.postDocument('purchase',supplier,nowDate(),[
+      ItemLine(variant,1,2500,unit:'roll',factor:20),
+    ],0,cash);
+    expect(numVal((await store.stock()).firstWhere((r)=>r['id']==variant)['qty']),53);
+    await store.voidDocument(sale);
+    expect(numVal((await store.stock()).firstWhere((r)=>r['id']==variant)['qty']),60);
+    await store.voidDocument(purchase);
+    expect(numVal((await store.stock()).firstWhere((r)=>r['id']==variant)['qty']),40);
+  });
+
+  test('Table Sheet Roll requires a valid whole count per Roll',()async{
+    final category=await store.addCategory('Sheet Packaging');
+    final product=await store.addProduct(category,'Sheet Package');
+    expect(()=>store.createSimpleVariant(productId:product,packing:'table_sheet_roll',
+      packSize:1,openingPacks:1),throwsFormatException);
+    expect(()=>store.createSimpleVariant(productId:product,packing:'table_sheet_roll',
+      packSize:1,sheetsPerRoll:0,openingPacks:1),throwsFormatException);
+  });
+
   test('dynamic sets of 3, 5, 7, 9 and loose packet pieces',()async{
     final category=await store.addCategory('Sets and Bundles');
     final product=await store.addProduct(category,'Kitchen Items');

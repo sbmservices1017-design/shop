@@ -12,6 +12,14 @@ double numVal(Object? value) => value is num ? value.toDouble() : double.tryPars
 String nowDate() => DateTime.now().toIso8601String().substring(0,10);
 String nowStamp() => DateTime.now().toIso8601String();
 
+String paymentAccountLabel(Map<String,Object?> account) {
+  final holder='${account['holder_name']??''}'.trim();
+  final code='${account['code']??account['id']}';
+  final name='${account['name']}';
+  return holder.isEmpty?'$name  •  $code':'$name  •  $holder  •  $code';
+}
+
+
 const schema = <String>[
   '''CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)''',
   '''CREATE TABLE IF NOT EXISTS document_revisions(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES documents(id),changed_at TEXT NOT NULL,old_invoice TEXT NOT NULL,old_date TEXT NOT NULL,old_party_id INTEGER,old_total INTEGER NOT NULL,old_paid INTEGER NOT NULL,old_notes TEXT NOT NULL,old_lines_json TEXT NOT NULL)''',
@@ -26,7 +34,7 @@ const schema = <String>[
 '''CREATE TABLE IF NOT EXISTS document_lines(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES documents(id),variant_id INTEGER NOT NULL REFERENCES variants(id),qty REAL NOT NULL CHECK(qty>0),rate INTEGER NOT NULL CHECK(rate>=0),amount INTEGER NOT NULL CHECK(amount>=0))''',
 '''CREATE TABLE IF NOT EXISTS variant_units(variant_id INTEGER NOT NULL REFERENCES variants(id),unit TEXT NOT NULL COLLATE NOCASE,factor REAL NOT NULL CHECK(factor>0),can_buy INTEGER NOT NULL DEFAULT 1,can_sell INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(variant_id,unit))''',
 '''CREATE TABLE IF NOT EXISTS document_line_units(line_id INTEGER PRIMARY KEY REFERENCES document_lines(id) ON DELETE CASCADE,unit TEXT NOT NULL,factor REAL NOT NULL CHECK(factor>0))''',
-'''CREATE TABLE IF NOT EXISTS payment_accounts(account_id INTEGER PRIMARY KEY REFERENCES accounts(id),kind TEXT NOT NULL CHECK(kind IN ('cash','bank','wallet')))''',
+'''CREATE TABLE IF NOT EXISTS payment_accounts(account_id INTEGER PRIMARY KEY REFERENCES accounts(id),kind TEXT NOT NULL CHECK(kind IN ('cash','bank','wallet')),holder_name TEXT NOT NULL DEFAULT '')''',
 '''CREATE TABLE IF NOT EXISTS stock_movements(id INTEGER PRIMARY KEY,variant_id INTEGER NOT NULL REFERENCES variants(id),qty REAL NOT NULL,source_type TEXT NOT NULL,source_id INTEGER NOT NULL,date TEXT NOT NULL,note TEXT NOT NULL DEFAULT '')''',
 '''CREATE TABLE IF NOT EXISTS party_ledger(id INTEGER PRIMARY KEY,party_id INTEGER NOT NULL REFERENCES parties(id),debit INTEGER NOT NULL DEFAULT 0,credit INTEGER NOT NULL DEFAULT 0,source_type TEXT NOT NULL,source_id INTEGER NOT NULL,date TEXT NOT NULL,note TEXT NOT NULL DEFAULT '')''',
 '''CREATE TABLE IF NOT EXISTS accounts(id INTEGER PRIMARY KEY,code TEXT NOT NULL UNIQUE,name TEXT NOT NULL,type TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1)''',
@@ -81,6 +89,12 @@ class Store {
     await db.rawInsert("INSERT OR IGNORE INTO expense_categories(name) VALUES('General')");
     // Safe repeated migration; never change historical stock on upgrade.
     await db.execute("INSERT OR IGNORE INTO payment_accounts(account_id,kind) SELECT id,CASE WHEN code='1000' THEN 'cash' ELSE 'bank' END FROM accounts WHERE code IN ('1000','1010')");
+    // Existing installations have payment_accounts without a holder_name column.
+    // Adding the column preserves every account ID, invoice, and journal reference.
+    final paymentColumns=await db.rawQuery('PRAGMA table_info(payment_accounts)');
+    if(!paymentColumns.any((column)=>column['name']=='holder_name')){
+      await db.execute("ALTER TABLE payment_accounts ADD COLUMN holder_name TEXT NOT NULL DEFAULT ''");
+    }
   }
 
   Future<List<Map<String,Object?>>> read(String sql,[List<Object?> args=const []]) => db.rawQuery(sql,args);
@@ -128,16 +142,27 @@ class Store {
     double feetPerGazz=3,
     double? rollGazz,
     double? tableSheetGazz,
+    int? sheetsPerRoll,
     double openingPacks=0,
   }) async {
-    if(!{'piece','set','packet','roll'}.contains(packing)) {
-      throw const FormatException('Choose Piece, Set, Packet or Roll');
+    if(!{'piece','set','packet','roll','table_sheet_roll'}.contains(packing)) {
+      throw const FormatException('Choose Piece, Set, Packet, Roll or Table Sheet Roll');
+    }
+    // Finished, ready-made Table Sheets are counted as individual Sheets.
+    // This is a DIFFERENT variation from a length-based Roll (Feet/Gazz).
+    if(packing=='table_sheet_roll' &&
+       (sheetsPerRoll==null || sheetsPerRoll<1 || sheetsPerRoll>1000000)) {
+      throw const FormatException('Enter how many Table Sheets are inside one Roll');
+    }
+    if(packing!='table_sheet_roll' && sheetsPerRoll!=null) {
+      throw const FormatException('Sheets per Roll is only valid for Table Sheet Rolls');
     }
     // Stock is always stored in feet for Rolls and pieces for Sets/Packets.
     // New simple catalog collects Gazz per Roll; older clients can still
     // supply packSize in Feet to keep existing tests and data compatible.
-    final factor=packing=='roll' && rollGazz!=null
-        ? rollGazz*feetPerGazz : (packing=='piece'?1.0:packSize);
+    final factor=packing=='table_sheet_roll' ? sheetsPerRoll!.toDouble()
+        : (packing=='roll' && rollGazz!=null
+          ? rollGazz*feetPerGazz : (packing=='piece'?1.0:packSize));
     if(rollGazz!=null && (packing!='roll' || !rollGazz.isFinite || rollGazz<=0)) {
       throw const FormatException('Gazz per Roll must be a positive number');
     }
@@ -158,7 +183,8 @@ class Store {
       throw const FormatException('Opening stock in Pieces must be a whole number');
     }
     final details=<String,String>{'Size':size.trim(),'Color':color.trim(),
-      'Design':design.trim(),'Quality':quality.trim()};
+      'Design':design.trim(),'Quality':quality.trim(),
+      if(packing=='table_sheet_roll') 'Packing':'Table Sheet Roll ($sheetsPerRoll Sheets)'};
     return db.transaction((t) async {
       final pr=await t.rawQuery('SELECT category_id FROM products WHERE id=? AND active=1',[productId]);
       if(pr.isEmpty)throw const FormatException('Product not found');
@@ -176,7 +202,14 @@ class Store {
         await t.rawInsert('INSERT INTO variant_values(variant_id,attribute_id,value) VALUES(?,?,?)',
           [vid,attr.first['id'],entry.value]);
       }
-      if(packing!='piece') {
+      if(packing=='table_sheet_roll') {
+        // Buy 1 Roll = N ready-made Sheets, sell as Sheets or full Rolls.
+        // Keep canonical stock in whole pieces; no length/Gazz conversion.
+        await t.rawInsert('INSERT INTO variant_units(variant_id,unit,factor,can_buy,can_sell) VALUES(?,?,?,?,?)',
+          [vid,'roll',factor,1,1]);
+        await t.rawInsert('INSERT INTO variant_units(variant_id,unit,factor,can_buy,can_sell) VALUES(?,?,?,?,?)',
+          [vid,'table sheet',1.0,0,1]);
+      } else if(packing!='piece') {
         await t.rawInsert('INSERT INTO variant_units(variant_id,unit,factor,can_buy,can_sell) VALUES(?,?,?,?,?)',
           [vid,packing,factor,1,1]);
       }
@@ -193,7 +226,10 @@ class Store {
         await t.rawInsert('INSERT INTO stock_movements(variant_id,qty,source_type,source_id,date,note) VALUES(?,?,?,?,?,?)',
           [vid,opening,'OPENING',vid,nowDate(),'Opening stock in $packing']);
       }
-      await audit(t,'ADD','variant',vid,'Simple product variation: $packing');
+      await audit(t,'ADD','variant',vid,
+          packing=='table_sheet_roll'
+            ? 'Table Sheet Roll of $sheetsPerRoll individual Sheets'
+            : 'Simple product variation: $packing');
       return vid;
     });
   }
@@ -246,8 +282,12 @@ class Store {
     await db.rawUpdate('UPDATE $table SET active=0 WHERE id=?',[id]);
   }
   Future<List<Map<String,Object?>>> stock() => read('''SELECT v.id, p.name AS product,c.name AS category,v.sku,v.unit,coalesce(sum(m.qty),0) AS qty,
+    CASE WHEN EXISTS(SELECT 1 FROM variant_units ts WHERE ts.variant_id=v.id AND ts.unit='table sheet' AND ts.factor=1)
+      THEN 'Table Sheets' ELSE v.unit END AS display_unit,
     p.id AS product_id,(SELECT group_concat(a.name||': '||vv.value,', ') FROM variant_values vv JOIN attributes a ON a.id=vv.attribute_id WHERE vv.variant_id=v.id) AS attrs,
-    (SELECT u.unit||' of '||CAST(u.factor AS TEXT)||' '||v.unit FROM variant_units u WHERE u.variant_id=v.id AND u.unit IN ('set','packet','roll') LIMIT 1) AS package
+    CASE WHEN EXISTS(SELECT 1 FROM variant_units ts WHERE ts.variant_id=v.id AND ts.unit='table sheet' AND ts.factor=1)
+      THEN '1 Roll = '||(SELECT CAST(ru.factor AS INTEGER) FROM variant_units ru WHERE ru.variant_id=v.id AND ru.unit='roll')||' Table Sheets'
+      ELSE (SELECT u.unit||' of '||CAST(u.factor AS TEXT)||' '||v.unit FROM variant_units u WHERE u.variant_id=v.id AND u.unit IN ('set','packet','roll') LIMIT 1) END AS package
     FROM variants v JOIN products p ON p.id=v.product_id JOIN categories c ON c.id=p.category_id
     LEFT JOIN stock_movements m ON m.variant_id=v.id WHERE v.active=1 AND p.active=1 AND c.active=1 GROUP BY v.id ORDER BY p.name,v.sku''');
   /// A variant has one canonical stock unit (variants.unit).  All purchase/sale
@@ -271,13 +311,72 @@ class Store {
       await audit(t,'SET','variant_unit',variant,'${unit.trim()} = $factor ${rows.first['unit']}');
     });
   }
-  Future<int> addPaymentAccount(String code,String name,String kind) async {
-    if(!{'cash','bank','wallet'}.contains(kind)||name.trim().isEmpty||code.trim().isEmpty)throw const FormatException('Account code, name and type required');
+  /// Payment accounts keep their original accounts.id primary key forever.
+  /// An empty [code] generates the next unique, human-readable PAY-000001 code.
+  /// Nonempty legacy codes remain supported for backwards compatibility.
+  Future<int> addPaymentAccount(String code,String name,String kind,{String holderName=''}) async {
+    if(!{'cash','bank','wallet'}.contains(kind)||name.trim().isEmpty){
+      throw const FormatException('Account name and a valid payment method are required');
+    }
+    final enteredCode=code.trim();
     return db.transaction((t)async {
-      final id=await t.rawInsert('INSERT INTO accounts(code,name,type) VALUES(?,?,?)',[code.trim(),name.trim(),'asset']);
-      await t.rawInsert('INSERT INTO payment_accounts(account_id,kind) VALUES(?,?)',[id,kind]);
-      await audit(t,'ADD','payment_account',id,name.trim());
+      var finalCode=enteredCode;
+      if(finalCode.isEmpty){
+        final rows=await t.rawQuery('''SELECT COALESCE(MAX(CAST(SUBSTR(code,5) AS INTEGER)),0) AS latest
+          FROM accounts WHERE code GLOB 'PAY-[0-9]*' AND LENGTH(code)=10''');
+        final highestExisting=(rows.first['latest'] as num?)?.toInt()??0;
+        final counterRows=await t.rawQuery("SELECT value FROM app_settings WHERE key='payment_account_sequence'");
+        final lastIssued=counterRows.isEmpty?0:(int.tryParse('${counterRows.first['value']}')??0);
+        final next=(highestExisting>lastIssued?highestExisting:lastIssued)+1;
+        finalCode='PAY-${next.toString().padLeft(6,'0')}';
+        await t.rawInsert('''INSERT INTO app_settings(key,value) VALUES('payment_account_sequence',?)
+          ON CONFLICT(key) DO UPDATE SET value=excluded.value''',['$next']);
+      }
+      final id=await t.rawInsert('INSERT INTO accounts(code,name,type) VALUES(?,?,?)',[finalCode,name.trim(),'asset']);
+      await t.rawInsert('INSERT INTO payment_accounts(account_id,kind,holder_name) VALUES(?,?,?)',
+        [id,kind,holderName.trim()]);
+      await audit(t,'ADD','payment_account',id,'$finalCode ${name.trim()} · ${holderName.trim()}');
       return id;
+    });
+  }
+  /// General ledger accounts get their own automatic GL series; system codes
+  /// (1000, 1010, etc.) remain unchanged for existing accounting references.
+  Future<int> addLedgerAccount(String name,String type) async {
+    if(name.trim().isEmpty||!{'asset','liability','equity','revenue','expense'}.contains(type)){
+      throw const FormatException('Enter account name and valid account type');
+    }
+    return db.transaction((t)async {
+      final existing=await t.rawQuery("SELECT COALESCE(MAX(CAST(SUBSTR(code,4) AS INTEGER)),0) AS latest FROM accounts WHERE code GLOB 'GL-[0-9]*' AND LENGTH(code)=9");
+      final highest=(existing.first['latest'] as num?)?.toInt()??0;
+      final counter=await t.rawQuery("SELECT value FROM app_settings WHERE key='ledger_account_sequence'");
+      final last=counter.isEmpty?0:(int.tryParse('${counter.first['value']}')??0);
+      final next=(highest>last?highest:last)+1;
+      final code='GL-${next.toString().padLeft(6,'0')}';
+      await t.rawInsert("INSERT INTO app_settings(key,value) VALUES('ledger_account_sequence',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",['$next']);
+      final id=await t.rawInsert('INSERT INTO accounts(code,name,type) VALUES(?,?,?)',
+        [code,name.trim(),type]);
+      await audit(t,'ADD','account',id,'$code ${name.trim()}');
+      return id;
+    });
+  }
+  Future<List<Map<String,Object?>>> paymentAccountRows() => read('''
+    SELECT a.id,a.code,a.name,pa.kind,pa.holder_name FROM accounts a
+    JOIN payment_accounts pa ON pa.account_id=a.id
+    WHERE a.active=1 ORDER BY a.name,a.code''');
+  Future<Map<int,String>> paymentAccountOptions() async {
+    final rows=await paymentAccountRows();
+    return {for(final a in rows)a['id'] as int: paymentAccountLabel(a)};
+  }
+  Future<void> updatePaymentAccountDetails(int accountId,{required String name,required String holderName}) async {
+    if(name.trim().isEmpty)throw const FormatException('Account name is required');
+    await db.transaction((t)async {
+      final found=await t.rawQuery('''SELECT a.id FROM accounts a
+        JOIN payment_accounts p ON p.account_id=a.id WHERE a.id=?''',[accountId]);
+      if(found.isEmpty)throw const FormatException('Payment account not found');
+      await t.rawUpdate('UPDATE accounts SET name=? WHERE id=?',[name.trim(),accountId]);
+      await t.rawUpdate('UPDATE payment_accounts SET holder_name=? WHERE account_id=?',
+        [holderName.trim(),accountId]);
+      await audit(t,'EDIT','payment_account',accountId,'Payment account name / holder changed');
     });
   }
   Future<void> adjustStock(int variant,double diff,String reason) async {

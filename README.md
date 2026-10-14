@@ -1,3 +1,11 @@
+# ShopDesk Pro v0.9.5 — Account Holder & Automatic IDs
+
+New payment accounts now request **Account Name**, **Account Holder Name**, and **Cash / Bank / Wallet**. Account IDs are assigned automatically (`PAY-000001`, etc.), displayed in the Accounts list and payment dropdowns across POS and other payment screens. General ledger accounts also receive automatic `GL-000001` codes. Existing account codes and journal-linked IDs are preserved. Existing databases receive a non-destructive `holder_name` column migration.
+
+**Important:** This is a Flutter source package, not a compiled or verified Windows EXE. Test on a backed-up demo database before use. See `START_HERE_V0_9_5.txt`.
+
+---
+
 # ShopDesk Pro v0.9.1 — Build fix for Dart constant test arguments
 
 This package is the FULL v0.9.0 Flutter source, with a focused fix for GitHub Actions Static Analyzer errors in `test/store_test.dart`.
@@ -97,3 +105,15 @@ Existing POS, stock, purchase, ledger, reporting and payroll business methods ha
 - Product-first POS variation dropdown shows all size/color/design/cut options.
 - Historical invoice unit factors are snapshotted as before.
 - **Flutter and Windows builds not verified in this environment.** Test on GitHub Actions.
+
+
+## v0.9.4 — Separate Ready-made Table Sheet Roll variation
+- Add Variation → **Table Sheet Roll** is a separate choice from Feet/Gazz Roll.
+- Enter **How many Table Sheets in one Roll?** (default 20), plus quantity of Rolls.
+- One Roll with 20 sheets adds 20 individual Table Sheets to stock.
+- POS purchase defaults to Roll, sale defaults to Table Sheet, optional full Roll sale.
+- POS does not show Gazz/Feet/Pieces for these ready-made sheet variants.
+- Cutting-by-Gazz Roll is still a separate, unchanged unit model.
+- New database columns are not needed: the existing variant_units conversion table stores 1 Roll = N Sheets.
+- Existing Payroll, Accounts, Licensing and SBM branding left unchanged.
+- Flutter SDK unavailable here; GitHub Windows analyzer, tests and build must still run.

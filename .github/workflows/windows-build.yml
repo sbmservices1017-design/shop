@@ -1,4 +1,4 @@
-name: Build ShopDesk Windows EXE (v0.9.3)
+name: Build ShopDesk Windows EXE (v0.9.5)
 
 on:
   workflow_dispatch:
@@ -40,9 +40,14 @@ jobs:
           if (-not (Test-Path 'lib/commercial_core.dart')) { throw 'Commercial upgrade source missing' }
           if (-not (Test-Path 'lib/license_public.dart')) { throw 'License public key missing' }
           if (Test-Path 'shopdesk_license_private.pem') { throw 'PRIVATE SIGNING KEY MUST NEVER BE COMMITTED TO GITHUB' }
-          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.9.3'))) { throw 'ShopDesk v0.9.3 source version missing' }
+          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('v0.9.5'))) { throw 'ShopDesk v0.9.5 source version missing' }
+          if (-not $source.Contains('paymentAccountOptions')) { throw 'Payment account holder/ID helper missing' }
+          if (-not $source.Contains('PAY-${next.toString().padLeft(6')) { throw 'Automatic payment account ID missing' }
           if (-not (Test-Path 'lib/simple_catalog.dart')) { throw 'Simplified catalog screen missing' }
           if (-not ($ui.Contains('SimpleProductsScreen'))) { throw 'Simple product workflow not wired in' }
+          if (-not $source.Contains("packing=='table_sheet_roll'")) { throw 'Separate Table Sheet Roll packing logic missing.' }
+          if (-not ((Get-Content 'lib/simple_catalog.dart' -Raw).Contains('How many Table Sheets in one Roll?'))) { throw 'Table Sheet Roll input missing.' }
+          if (-not ((Get-Content 'test/simple_catalog_test.dart' -Raw).Contains('20 Sheets per Roll'))) { throw 'Table Sheet Roll regression test missing.' }
           if (-not $source.Contains('createSimpleVariant')) { throw 'Automatic Set/Packet/Roll conversion logic missing' }
           if (-not $source.Contains('tableSheetGazz')) { throw 'Table Sheet unit conversion missing' }
           if (-not ((Get-Content 'lib/simple_catalog.dart' -Raw).Contains('How many Gazz in one Roll?'))) { throw 'Roll Gazz input missing' }
@@ -59,7 +64,7 @@ jobs:
           if (-not (Test-Path 'assets/branding/sbm_logo.png')) { throw 'SBM transparent logo missing' }
           if (-not ((Get-Content 'lib/main.dart' -Raw).Contains('const SbmFooter()'))) { throw 'SBM global footer missing from Shell' }
           if (-not ((Get-Content 'lib/nexa_theme.dart' -Raw).Contains('Expanded(flex: 43, child: _brandPanel())'))) { throw 'SBM split-screen login layout missing' }
-          Write-Host 'ShopDesk v0.9.3 simple catalog and POS source layout confirmed'  
+          Write-Host 'ShopDesk v0.9.5 simple catalog and POS source layout confirmed'  
 
       - name: Generate native Windows files
         run: flutter create --platforms=windows --project-name shopdesk_flutter --no-pub .
