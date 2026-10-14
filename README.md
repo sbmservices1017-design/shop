@@ -31,3 +31,7 @@ Upload the **contents** of `ShopDesk/` to the repository root (including hidden 
 
 ## v0.9.7 analyzer correction
 See `FIX_NOTES_V0_9_7.md`. This update repairs one POS split-payment widget syntax error and supplies missing test variation parameters. No inventory, accounting, payroll, or licensing business methods were modified.
+
+
+## v0.9.8 payroll UI regression correction
+See `FIX_NOTES_V0_9_8.md`. Updates the stale payroll widget test to target stable keyed fields after the salary-date field addition; payroll calculations and database transactions are unchanged. Build with the v0.9.8 workflow.
