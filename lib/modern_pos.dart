@@ -116,7 +116,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
           ])),
           actions:[TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Cancel')),
             FilledButton.icon(onPressed:()=>Navigator.pop(dialogContext,selected),
-              icon:const Icon(Icons.add),label:const Text('Add to Cart'))]);
+              icon:const Icon(Icons.add),label:const Text('Add to Cart'),style:FilledButton.styleFrom(minimumSize:const Size(160,48)))]);
       }));
     if(choice!=null&&mounted)add(choice);
   }
@@ -168,18 +168,18 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
     final grouped=<int,Map<String,Object?>>{};
     for(final item in filtered){grouped.putIfAbsent(item['product_id'] as int,()=>item);}
     final displayProducts=grouped.values.toList();
-    return LayoutBuilder(builder:(ctx,layout)=>Padding(padding:const EdgeInsets.all(20),child:Column(children:[
+    return LayoutBuilder(builder:(ctx,layout)=>Padding(padding:const EdgeInsets.all(12),child:Column(children:[
       Row(children:[Icon(sale?Icons.point_of_sale:Icons.local_shipping_outlined,color:const Color(0xFF4B63D9),size:26),const SizedBox(width:10),Expanded(child:Text(sale?'Sales POS · Manual Billing':'Purchase POS · Stock In',style:const TextStyle(fontSize:20,fontWeight:FontWeight.w800))),const SizedBox.shrink()]),const SizedBox(height:12),
-      Expanded(child:layout.maxWidth>1000?Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(flex:6,child:catalogPane(displayProducts,cats)),const SizedBox(width:14),Expanded(flex:5,child:cartPane())]):ListView(children:[SizedBox(height:400,child:catalogPane(displayProducts,cats)),const SizedBox(height:12),SizedBox(height:650,child:cartPane())]))
+      Expanded(child:layout.maxWidth>1000?Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(flex:5,child:catalogPane(displayProducts,cats)),const SizedBox(width:12),Expanded(flex:7,child:cartPane())]):ListView(children:[SizedBox(height:400,child:catalogPane(displayProducts,cats)),const SizedBox(height:12),SizedBox(height:650,child:cartPane())]))
     ])));
   }
   Widget catalogPane(List<Map<String,Object?>> filtered,List<String> categories)=>Card(child:Padding(padding:const EdgeInsets.all(15),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
     TextField(controller:search,onChanged:(_)=>setState((){}),decoration:const InputDecoration(prefixIcon:Icon(Icons.search),labelText:'Search Product / Size / Color')),const SizedBox(height:12),
     SizedBox(height:48,child:ListView(scrollDirection:Axis.horizontal,children:categories.map((c)=>Padding(padding:const EdgeInsets.only(right:8),child:ChoiceChip(label:Text(c),selected:c==category,onSelected:(_)=>setState(()=>category=c)))).toList())),
-    const SizedBox(height:6),Expanded(child:filtered.isEmpty?const Center(child:Text('No matching variations')):ListView.builder(itemCount:filtered.length,itemBuilder:(ctx,i){final p=filtered[i];final qty=numVal(p['qty']);return Card(color:const Color(0xFFF6F8FD),child:ListTile(onTap:()=>chooseVariant(p),title:Text('${p['product']}',style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text('${p['category']} • Tap to choose variation\n${catalog.where((v)=>v['product_id']==p['product_id']).length} variations available',style:TextStyle(color:qty<0?Colors.deepOrange:Colors.blueGrey)),isThreeLine:true,trailing:const Icon(Icons.add_circle,color:Color(0xFF4B63D9))));}))
+    const SizedBox(height:6),Expanded(child:filtered.isEmpty?const Center(child:Text('No matching variations')):ListView.builder(itemCount:filtered.length,itemBuilder:(ctx,i){final p=filtered[i];final qty=numVal(p['qty']);return Card(color:const Color(0xFFF6F8FD),child:ListTile(onTap:()=>chooseVariant(p),title:Text('${p['product']}',style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text('${p['category']} • Tap to choose variation\n${catalog.where((v)=>v['product_id']==p['product_id']).length} variations available',style:TextStyle(color:qty<0?Colors.deepOrange:Colors.blueGrey)),isThreeLine:true,trailing:FilledButton.icon(onPressed:()=>chooseVariant(p),icon:const Icon(Icons.add_shopping_cart,size:19),label:const Text('Add to Cart'),style:FilledButton.styleFrom(minimumSize:const Size(130,46)))));}))
   ])));
   Widget cartPane()=>Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-    Row(children:[Expanded(child:Text('Bill Cart · ${cart.length} SKU',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w800))),Text(paymentLabel,style:TextStyle(fontWeight:FontWeight.w800,fontSize:11,color:paymentLabel=='PAID'?Colors.green:Colors.deepOrange))]),const SizedBox(height:9),
+    Row(children:[Expanded(child:Text('Bill Cart · ${cart.length} Items',style:const TextStyle(fontSize:22,fontWeight:FontWeight.w800))),Text(paymentLabel,style:TextStyle(fontWeight:FontWeight.w800,fontSize:11,color:paymentLabel=='PAID'?Colors.green:Colors.deepOrange))]),const SizedBox(height:9),
     Expanded(child:cart.isEmpty?const Center(child:Text('Select a product from the left')):ListView(children:[for(final row in cart)Card(color:const Color(0xFFF9FAFD),child:Padding(padding:const EdgeInsets.all(9),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
       Row(children:[Expanded(child:Text('${row.product['product']}',style:const TextStyle(fontWeight:FontWeight.bold))),IconButton(onPressed:(){setState(()=>cart.remove(row));row.dispose();},icon:const Icon(Icons.close,size:18))]),
       Text('Size / Color: ${(row.product['attrs']??'Standard').toString().isEmpty?'Standard':row.product['attrs']}',style:const TextStyle(color:Colors.blueGrey,fontSize:11)),const SizedBox(height:6),
@@ -245,7 +245,7 @@ class _HistoryPane extends StatelessWidget {
             if(d['status']=='POSTED'&&CommercialCore.instance.current?.allowed(module,'edit')==true && onCorrectInvoice!=null)
               IconButton(tooltip:'Correct invoice',onPressed:()=>onCorrectInvoice!(d['id'] as int),icon:const Icon(Icons.edit_note)),
             if(d['status']=='POSTED'&&CommercialCore.instance.current?.allowed(module,'delete')==true)
-              IconButton(tooltip:'Void invoice',onPressed:()async{
+              IconButton(tooltip:'Delete / cancel invoice',onPressed:()async{
                 final proceed=await showDialog<bool>(context:context,builder:(dialog)=>AlertDialog(title:const Text('Void invoice?'),content:const Text('Stock and accounting postings will be reversed.'),actions:[TextButton(onPressed:()=>Navigator.pop(dialog,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(dialog,true),child:const Text('Void'))]));
                 if(proceed==true){
                   try{await Store.instance.voidDocument(d['id'] as int);onChange();}

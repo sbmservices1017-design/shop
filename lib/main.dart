@@ -82,7 +82,7 @@ Future<bool> confirm(BuildContext context,String text)async=>(await showDialog<b
 
 class Shell extends StatefulWidget {const Shell({super.key});@override State<Shell> createState()=>_ShellState();}
 class _ShellState extends State<Shell> {
-  int page=0;int revision=0;
+  int page=0;int revision=0;int previousPage=0;
   final menu=<({String label,IconData icon})>[
     (label:'Dashboard',icon:Icons.dashboard_rounded),
     (label:'POS',icon:Icons.point_of_sale_rounded),
@@ -126,7 +126,7 @@ class _ShellState extends State<Shell> {
     _=>const SettingsHub()};}
   Future<void> searchModules(List<int> available) async {
     final chosen=await showSearch<int?>(context:context,delegate:_ModuleSearchDelegate(menu,available));
-    if(chosen!=null && mounted)setState(()=>page=chosen);
+    if(chosen!=null && mounted)setState((){if(page!=1)previousPage=page;page=chosen;});
   }
   @override Widget build(BuildContext context){
     final core=CommercialCore.instance;
@@ -134,6 +134,26 @@ class _ShellState extends State<Shell> {
     if(available.isEmpty)return Scaffold(body:Column(children:[Expanded(child:Center(child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[const Text('No modules assigned to this account.'),TextButton(onPressed:core.signOut,child:const Text('Sign out'))]))),const SbmFooter()]));
     if(!available.contains(page))page=available.first;
     final dark=false;
+    // POS occupies the full window: no sidebar, wider cart and dedicated exit controls.
+    if(page==1){
+      return Scaffold(backgroundColor:bg,body:Column(children:[
+        Container(height:69,padding:const EdgeInsets.symmetric(horizontal:20),
+          decoration:const BoxDecoration(color:Colors.white,border:Border(bottom:BorderSide(color:Color(0xFFDCE9F9)))),
+          child:Row(children:[
+            OutlinedButton.icon(key:const Key('pos-dashboard'),onPressed:available.contains(0)?()=>setState(()=>page=0):null,
+              icon:const Icon(Icons.dashboard_outlined),label:const Text('Dashboard')),
+            const SizedBox(width:12),
+            OutlinedButton.icon(key:const Key('pos-back'),onPressed:()=>setState(()=>page=available.contains(previousPage)&&previousPage!=1?previousPage:available.firstWhere((i)=>i!=1,orElse:()=>1)),
+              icon:const Icon(Icons.arrow_back),label:const Text('Back')),
+            const SizedBox(width:17),const Icon(Icons.point_of_sale,color:blue),const SizedBox(width:9),
+            const Expanded(child:Text('ShopDesk Pro  •  Full Screen POS',style:TextStyle(fontSize:20,fontWeight:FontWeight.w800,color:ink))),
+            const LicenseCountdown(compact:true),const SizedBox(width:16),
+            IconButton(tooltip:'Refresh POS',onPressed:refresh,icon:const Icon(Icons.refresh)),
+          ])),
+        Expanded(child:KeyedSubtree(key:ValueKey('pos-$revision'),child:PosWorkspace(onChange:refresh))),
+        const SbmFooter(),
+      ]));
+    }
     return Scaffold(backgroundColor:dark?Nexa.background:bg,body:Row(children:[
       Container(width:237,decoration:const BoxDecoration(color:Nexa.sidebar,border:Border(right:BorderSide(color:Nexa.outline))),child:Column(children:[
         Padding(padding:const EdgeInsets.fromLTRB(23,23,12,29),child:Row(children:[
@@ -143,7 +163,7 @@ class _ShellState extends State<Shell> {
         ])),
         Expanded(child:ListView(padding:const EdgeInsets.symmetric(horizontal:16),children:[
           for(final i in available)Padding(padding:const EdgeInsets.only(bottom:5),child:Material(
-            color:Colors.transparent,child:InkWell(borderRadius:BorderRadius.circular(9),onTap:()=>setState(()=>page=i),child:Container(
+            color:Colors.transparent,child:InkWell(borderRadius:BorderRadius.circular(9),onTap:()=>setState((){if(page!=1)previousPage=page;page=i;}),child:Container(
               height:45,padding:const EdgeInsets.symmetric(horizontal:13),decoration:BoxDecoration(
                 gradient:i==page?Nexa.blueGradient:null,borderRadius:BorderRadius.circular(9)),
               child:Row(children:[Icon(menu[i].icon,size:19,color:i==page?Colors.white:Nexa.secondary),const SizedBox(width:14),Expanded(child:Text(menu[i].label,maxLines:1,overflow:TextOverflow.ellipsis,style:TextStyle(color:i==page?Colors.white:Nexa.muted,fontSize:13,fontWeight:i==page?FontWeight.w700:FontWeight.w500)))]),
@@ -228,7 +248,7 @@ Widget txt(Object? s)=>Text('${s??''}',style:const TextStyle(fontSize:13));
 Widget buttons(List<Widget> widgets)=>Wrap(spacing:6,children:widgets);
 Widget small(String s,VoidCallback tap,{IconData icon=Icons.edit_outlined}){
   final title=s.toLowerCase();
-  final action=title.contains('view')||title.contains('print')?'view':title.contains('archive')||title.contains('void')||title.contains('disable')?'delete':title.contains('edit')||title.contains('rename')||title.contains('correct')?'edit':'create';
+  final action=title.contains('view')||title.contains('print')?'view':title.contains('delete')||title.contains('archive')||title.contains('void')||title.contains('disable')?'delete':title.contains('edit')||title.contains('rename')||title.contains('correct')?'edit':'create';
   return IconButton(tooltip:s,onPressed:canShopAction(action)?tap:null,icon:Icon(icon,size:18));
 }
 Future<Map<int,String>> options(Store s,String query,[List<Object?> args=const []]) async => {for(final x in await s.read(query,args))x['id'] as int:'${x['name']}'};
@@ -359,7 +379,7 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
   @override void dispose(){searchController.dispose();super.dispose();}
 
   Future<void> create([int? existing]) async {final ok=await showDialog<bool>(context:context,builder:(ctx)=>InvoiceDialog(kind:widget.kind,existingId:existing));if(ok==true)widget.onChange();}
-  Future<void> voidIt(int id)async{try{if(await confirm(context,'Void invoice? Stock, balances and journal entries will be reversed.')){await s.voidDocument(id);widget.onChange();}}catch(e){if(mounted)await showError(context,e);}}
+  Future<void> voidIt(int id)async{try{if(await confirm(context,'Delete / cancel invoice? Stock and ledger entries will be reversed. The original will remain in audit history.')){await s.voidDocument(id);widget.onChange();}}catch(e){if(mounted)await showError(context,e);}}
   Future<void> payInvoiceInstallment(Map<String,Object?> invoice)async {
     try{
       final accounts=await accountChoices(s);
@@ -431,7 +451,7 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
               if(r['status']=='POSTED'&&paid<total && r['party_id']!=null)
                 small('Add Installment',()=>payInvoiceInstallment(r),icon:Icons.payments_outlined),
               if(r['status']=='POSTED')small('Correct invoice',()=>create(r['id'] as int),icon:Icons.edit_note_outlined),
-              if(r['status']=='POSTED')small('Void',()=>voidIt(r['id'] as int),icon:Icons.block)
+              if(r['status']=='POSTED')small('Delete invoice',()=>voidIt(r['id'] as int),icon:Icons.delete_outline)
             ])];
         }).toList()),
       ]);
@@ -479,7 +499,7 @@ class _ReturnScreenState extends State<ReturnScreen>{final s=Store.instance;
       panel(const Text('Returning a sold item adds stock; returning a purchased item subtracts stock. Partial quantities and refunds are permitted. Posted returns can be reversed with a full audit trail.',style:TextStyle(color:Colors.blueGrey))),
       listing(['Date','Original invoice','Type','Customer / Supplier','Return Value','Cash Refund','Status','Action'],snap.data!.map((r)=>[
         txt(r['date']),txt(r['invoice']),txt(r['kind']),txt(r['party']),txt(funds(r['amount'])),txt(funds(r['refunded'])),txt(r['status']),
-        r['status']=='POSTED'?small('Void return',()=>change(()async{if(await confirm(context,'Void return? Stock, ledger and cash entries will be reversed.'))await s.voidReturn(r['id'] as int);}),icon:Icons.undo):txt('—')]).toList())]);
+        r['status']=='POSTED'?small('Delete return',()=>change(()async{if(await confirm(context,'Delete / cancel return? Stock and ledger entries will be reversed.'))await s.voidReturn(r['id'] as int);}),icon:Icons.delete_outline):txt('—')]).toList())]);
   });
 }
 
@@ -588,7 +608,7 @@ class _PartiesScreenState extends State<PartiesScreen>{final s=Store.instance;
       listing(['Name','Phone','Address',widget.kind=='customer'?'Receivable':'Payable','Actions'],snap.data!.map((p)=>[
         txt(p['name']),txt(p['phone']),txt(p['address']),Text(funds(p['balance']),style:const TextStyle(fontWeight:FontWeight.w700)),
         buttons([small('Ledger',()=>ledger(p),icon:Icons.menu_book_outlined),small('Payment',()=>change(()=>pay(p)),icon:Icons.payments_outlined),small('Payments history',()=>payments(p),icon:Icons.history),small('Opening balance',()=>change(()=>opening(p)),icon:Icons.account_balance_wallet_outlined),
-          small('Edit',()=>change(()=>form(p))),small('Archive',()=>change(()async{if(await confirm(context,'Archive record? The ledger will be preserved.'))await s.archive('parties',p['id'] as int);}),icon:Icons.archive_outlined)])]).toList())]);
+          small('Edit',()=>change(()=>form(p))),small('Delete ${widget.kind}',()=>change(()async{if(await confirm(context,'Remove ${widget.kind} from active records? Existing ledger remains in history.'))await s.deleteManagedRecord('parties',p['id'] as int);}),icon:Icons.delete_outline)])]).toList())]);
   });
 }
 
@@ -604,8 +624,16 @@ class _ExpenseScreenState extends State<ExpenseScreen>{final s=Store.instance;
         final categories=await options(s,'SELECT id,name FROM expense_categories ORDER BY name');
         final f=await ask(context,'Edit expense category',[FieldSpec('id','Category',choices:categories),const FieldSpec('name','New name')]);
         if(f!=null)await s.db.rawUpdate('UPDATE expense_categories SET name=? WHERE id=?',[f['name'],int.parse(f['id']!)]);
-      })),addButton('New expense',()=>change(add))])),
-    listing(['Date','Category','Note','Account','Amount','Status / Action'],snap.data!.map((e)=>[txt(e['date']),txt(e['category']),txt(e['description']),txt(e['account']),txt(funds(e['amount'])),e['reversed']==0?small('Reverse expense',()=>change(()async{if(await confirm(context,'Reverse expense and accounting entry?'))await s.voidExpense(e['id'] as int);}),icon:Icons.undo):txt('VOID')]).toList()),
+      })),OutlinedButton.icon(icon:const Icon(Icons.delete_outline),label:const Text('Delete category'),
+        onPressed:canShopAction('delete')?()=>change(()async{
+        final categories=await options(s,'SELECT id,name FROM expense_categories ORDER BY name');
+        if(categories.isEmpty)return;
+        final f=await ask(context,'Delete unused expense category',[FieldSpec('id','Category',choices:categories)]);
+        if(f!=null && mounted && await confirm(context,'Delete this expense category? Only unused categories can be removed.')){
+          await s.deleteExpenseCategory(int.parse(f['id']!));
+        }
+      }):null),addButton('New expense',()=>change(add))])),
+    listing(['Date','Category','Note','Account','Amount','Status / Action'],snap.data!.map((e)=>[txt(e['date']),txt(e['category']),txt(e['description']),txt(e['account']),txt(funds(e['amount'])),e['reversed']==0?small('Delete expense',()=>change(()async{if(await confirm(context,'Delete / reverse expense? Original will stay in the audit trail.'))await s.voidExpense(e['id'] as int);}),icon:Icons.delete_outline):txt('VOID')]).toList()),
     panel(const Text('Financial corrections should use reversal journal entries, not silent deletion of posted expenses.',style:TextStyle(fontSize:12,color:Colors.blueGrey)))]);
   });
 }
@@ -714,7 +742,7 @@ class _AccountsScreenState extends State<AccountsScreen>{final s=Store.instance;
     coalesce(sum(jl.debit-jl.credit),0) AS dr_balance FROM accounts a
     LEFT JOIN journal_lines jl ON jl.account_id=a.id
     LEFT JOIN payment_accounts pa ON pa.account_id=a.id
-    GROUP BY a.id ORDER BY a.code'''),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
+    WHERE a.active=1 GROUP BY a.id ORDER BY a.code'''),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
     return pageWrap([section('Chart of accounts',action:buttons([addButton('Add POS payment account',()=>change(addPaymentAccount)),addButton('Add account',()=>change(()async{
       final f=await ask(context,'Add Ledger Account (ID auto-generated)',[
         const FieldSpec('name','Account name'),
@@ -725,7 +753,8 @@ class _AccountsScreenState extends State<AccountsScreen>{final s=Store.instance;
         txt(a['code']),txt(a['name']),txt(a['holder_name']??'—'),txt(a['kind']??a['type']),
         txt(funds(a['dr_balance'])),buttons([
           small('View Ledger',()=>viewAccountLedger(a),icon:Icons.menu_book),
-          if(a['kind']!=null)small('Edit holder / account',()=>change(()=>editPaymentAccount(a)),icon:Icons.edit_outlined)
+          if(a['kind']!=null)small('Edit holder / account',()=>change(()=>editPaymentAccount(a)),icon:Icons.edit_outlined),
+          small('Delete account',()=>change(()async{if(await confirm(context,'Deactivate this account? Historical journal entries will be preserved. System accounts and accounts with balances cannot be removed.'))await s.deleteManagedRecord('accounts',a['id'] as int);}),icon:Icons.delete_outline)
         ])]).toList()),
       panel(const Text('Accounting journal posts are atomic with bills, supplier purchases, customer receipts, expenses, advances and payroll. Stock costing / full financial closing remain under development.',style:TextStyle(color:Colors.blueGrey,fontSize:12)))]);
   });

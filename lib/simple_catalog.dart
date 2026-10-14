@@ -52,11 +52,12 @@ class _SimpleCategoriesScreenState extends State<SimpleCategoriesScreen> {
           final n=await _nameDialog('Rename category','${item['name']}');
           if(n!=null&&n.isNotEmpty)await Store.instance.db.rawUpdate('UPDATE categories SET name=? WHERE id=?',[n,item['id']]);
         }):null,icon:const Icon(Icons.edit_outlined)),
-        IconButton(tooltip:'Archive',onPressed:canDelete?()=>_run(()async{
+        IconButton(tooltip:'Delete category',onPressed:canDelete?()=>_run(()async{
           final used=await Store.instance.count('SELECT count(*) FROM products WHERE category_id=? AND active=1',[item['id']]);
           if(used>0)throw const FormatException('Archive its products first.');
-          await Store.instance.archive('categories',item['id'] as int);
-        }):null,icon:const Icon(Icons.archive_outlined))]));})))
+          final yes=await showDialog<bool>(context:context,builder:(d)=>AlertDialog(title:const Text('Delete category?'),content:const Text('Category will be removed from the active list. Historic data stays safe.'),actions:[TextButton(onPressed:()=>Navigator.pop(d,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(d,true),child:const Text('Delete'))]));
+          if(yes==true)await Store.instance.deleteManagedRecord('categories',item['id'] as int);
+        }):null,icon:const Icon(Icons.delete_outline))]));})))
   ]));
 }
 
@@ -251,6 +252,14 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
             }):null,icon:const Icon(Icons.edit_outlined,size:17),label:const Text('Rename')),
             FilledButton.icon(onPressed:allow('create')?()=>_run(()=>_addVariation(p['id'] as int)):null,
               icon:const Icon(Icons.add,size:18),label:const Text('Add Size / Variation')),
+            OutlinedButton.icon(onPressed:allow('delete')?()=>_run(()async{
+              final yes=await showDialog<bool>(context:context,builder:(d)=>AlertDialog(
+                title:const Text('Delete product?'),
+                content:const Text('The product will be hidden from active stock and POS. Historical invoices remain unchanged.'),
+                actions:[TextButton(onPressed:()=>Navigator.pop(d,false),child:const Text('Cancel')),
+                  FilledButton(onPressed:()=>Navigator.pop(d,true),child:const Text('Delete'))]));
+              if(yes==true)await store.deleteManagedRecord('products',p['id'] as int);
+            }):null,icon:const Icon(Icons.delete_outline,size:18),label:const Text('Delete')),
           ])),const SizedBox(height:8),
           if(pvars.isEmpty)const Padding(padding:EdgeInsets.all(13),child:Text('No variation. Add a Standard variation or enter Size/Color.')),
           for(final v in pvars)ListTile(dense:true,
@@ -258,7 +267,14 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
             title:Text(('${v['attrs']??''}').trim().isEmpty?'Standard':'${v['attrs']}',style:const TextStyle(fontWeight:FontWeight.w600)),
             subtitle:Text('Stock: ${numVal(v['qty']).toStringAsFixed(numVal(v['qty'])%1==0?0:2)} ${v['display_unit']=='Table Sheets'?'Table Sheets':v['unit']=='ft'?'Feet':'Pieces'} • ${v['package']??'Single Piece'}'),
             trailing:Wrap(children:[IconButton(tooltip:'Edit Size/Color',onPressed:allow('edit')?()=>_run(()=>_editVariation(v['id'] as int)):null,icon:const Icon(Icons.edit_outlined)),
-              IconButton(tooltip:'Archive variation',onPressed:allow('delete')?()=>_run(()async{await store.archive('variants',v['id'] as int);}):null,icon:const Icon(Icons.archive_outlined))]),
+              IconButton(tooltip:'Delete variation',onPressed:allow('delete')?()=>_run(()async{
+                final yes=await showDialog<bool>(context:context,builder:(d)=>AlertDialog(
+                  title:const Text('Delete variation?'),
+                  content:const Text('Remove this variation from active POS? Its past transactions will be preserved.'),
+                  actions:[TextButton(onPressed:()=>Navigator.pop(d,false),child:const Text('Cancel')),
+                    FilledButton(onPressed:()=>Navigator.pop(d,true),child:const Text('Delete'))]));
+                if(yes==true)await store.deleteManagedRecord('variants',v['id'] as int);
+              }):null,icon:const Icon(Icons.delete_outline))]),
           )
         ]));}))
     ]));

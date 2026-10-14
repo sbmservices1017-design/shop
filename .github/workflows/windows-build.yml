@@ -1,4 +1,4 @@
-name: Build ShopDesk Windows EXE (v0.9.8)
+name: Build ShopDesk Windows EXE (v0.9.9)
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           if (-not (Test-Path 'lib/commercial_core.dart')) { throw 'Commercial upgrade source missing' }
           if (-not (Test-Path 'lib/license_public.dart')) { throw 'License public key missing' }
           if (Test-Path 'shopdesk_license_private.pem') { throw 'PRIVATE SIGNING KEY MUST NEVER BE COMMITTED TO GITHUB' }
-          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('SHOPDESK_SOURCE_0_9_8'))) { throw 'ShopDesk v0.9.8 source version missing' }
+          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('SHOPDESK_SOURCE_0_9_9'))) { throw 'ShopDesk v0.9.9 source version missing' }
           if (-not $source.Contains('paymentAccountOptions')) { throw 'Payment account holder/ID helper missing' }
           if (-not $source.Contains('postDocumentSplit')) { throw 'Split tender accounting not uploaded' }
           if (-not $source.Contains('recordInvoiceInstallment')) { throw 'Invoice installment handler missing' }
@@ -70,7 +70,10 @@ jobs:
           if (-not (Test-Path 'assets/branding/sbm_logo.png')) { throw 'SBM transparent logo missing' }
           if (-not ((Get-Content 'lib/main.dart' -Raw).Contains('const SbmFooter()'))) { throw 'SBM global footer missing from Shell' }
           if (-not ((Get-Content 'lib/nexa_theme.dart' -Raw).Contains('Expanded(flex: 43, child: _brandPanel())'))) { throw 'SBM split-screen login layout missing' }
-          Write-Host 'ShopDesk v0.9.8 simple catalog and POS source layout confirmed'  
+          if (-not $ui.Contains("Key('pos-dashboard')")) { throw 'POS full screen Dashboard button missing' }
+          if (-not $ui.Contains("key:const Key('pos-back')")) { throw 'POS full screen Back button missing' }
+          if (-not $source.Contains('deleteManagedRecord')) { throw 'Protected record deletion API missing' }
+          Write-Host 'ShopDesk v0.9.9 POS full screen and Delete actions present'  
 
       - name: Generate native Windows files
         run: flutter create --platforms=windows --project-name shopdesk_flutter --no-pub .
@@ -94,7 +97,7 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: ShopDesk database and UI regression tests
-        run: flutter test test/store_test.dart test/commercial_test.dart test/boot_setup_test.dart test/nexa_ui_test.dart test/payroll_math_test.dart test/payroll_ui_test.dart test/sbm_branding_test.dart test/simple_catalog_test.dart test/v0_9_6_shop_changes_test.dart
+        run: flutter test test/store_test.dart test/commercial_test.dart test/boot_setup_test.dart test/nexa_ui_test.dart test/payroll_math_test.dart test/payroll_ui_test.dart test/sbm_branding_test.dart test/simple_catalog_test.dart test/v0_9_6_shop_changes_test.dart test/delete_actions_test.dart
 
       - name: Build Windows release
         run: flutter build windows --release

@@ -1,3 +1,5 @@
+**Latest UI update:** See [UPGRADE_V0_9_9.md](UPGRADE_V0_9_9.md) for full-screen POS and safe Delete controls.
+
 # ShopDesk Pro v0.9.6 — Consolidated Client Changes
 
 Windows Flutter + SQLite single-PC desktop project. Built on v0.9.5; old modules, data and SBM branding remain in source.

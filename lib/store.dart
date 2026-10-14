@@ -294,6 +294,59 @@ class Store {
     if(!{'categories','products','variants','parties','employees','accounts'}.contains(table)) throw ArgumentError('Unsupported archive table');
     await db.rawUpdate('UPDATE $table SET active=0 WHERE id=?',[id]);
   }
+  /// User-facing Delete: deactivates catalog and ledger records without destroying
+  /// posted accounting history. Prevents hiding outstanding balances or live stock.
+  Future<void> deleteManagedRecord(String table,int id) async {
+    if(!{'categories','products','variants','parties','accounts'}.contains(table)){
+      throw const FormatException('Unsupported record type for deletion');
+    }
+    await db.transaction((t) async {
+      final rows=await t.rawQuery('SELECT id FROM $table WHERE id=? AND active=1',[id]);
+      if(rows.isEmpty)throw const FormatException('Record is already deleted or missing');
+      if(table=='categories'){
+        final children=await t.rawQuery('SELECT 1 FROM products WHERE category_id=? AND active=1 LIMIT 1',[id]);
+        if(children.isNotEmpty)throw const FormatException('Delete active products in this category first');
+      }
+      if(table=='products' || table=='variants'){
+        final stock=await t.rawQuery(table=='products'
+          ? '''SELECT coalesce(sum(m.qty),0) AS available FROM stock_movements m
+              JOIN variants v ON v.id=m.variant_id WHERE v.product_id=?'''
+          : 'SELECT coalesce(sum(qty),0) AS available FROM stock_movements WHERE variant_id=?',[id]);
+        if(numVal(stock.first['available']).abs()>0.000001){
+          throw const FormatException('Stock balance is not zero. Adjust stock before deleting');
+        }
+      }
+      if(table=='parties'){
+        final balance=await t.rawQuery('SELECT coalesce(sum(debit-credit),0) AS outstanding FROM party_ledger WHERE party_id=?',[id]);
+        if(((balance.first['outstanding'] as num?)?.toInt()??0)!=0){
+          throw const FormatException('Customer / supplier has an outstanding ledger balance. Settle it before deleting');
+        }
+      }
+      if(table=='accounts'){
+        final account=await t.rawQuery('SELECT code FROM accounts WHERE id=?',[id]);
+        final code='${account.first['code']}';
+        if(!code.startsWith('GL-') && !code.startsWith('PAY-')){
+          throw const FormatException('Built-in accounting control accounts cannot be deleted');
+        }
+        final balance=await t.rawQuery('SELECT coalesce(sum(debit-credit),0) AS balance FROM journal_lines WHERE account_id=?',[id]);
+        if(((balance.first['balance'] as num?)?.toInt()??0)!=0){
+          throw const FormatException('Account has a non-zero journal balance. Settle it before deleting');
+        }
+      }
+      await t.rawUpdate('UPDATE $table SET active=0 WHERE id=?',[id]);
+      await audit(t,'DELETE',table,id,'Soft deleted, historical records preserved');
+    });
+  }
+
+  Future<void> deleteExpenseCategory(int id) async {
+    await db.transaction((t) async {
+      final used=await t.rawQuery('SELECT id FROM expenses WHERE category_id=? LIMIT 1',[id]);
+      if(used.isNotEmpty)throw const FormatException('Expense category has transactions and cannot be deleted');
+      await t.rawDelete('DELETE FROM expense_categories WHERE id=?',[id]);
+      await audit(t,'DELETE','expense_category',id,'Deleted unused expense category');
+    });
+  }
+
   Future<List<Map<String,Object?>>> stock() => read('''SELECT v.id, p.name AS product,c.name AS category,v.sku,v.unit,coalesce(sum(m.qty),0) AS qty,
     CASE WHEN EXISTS(SELECT 1 FROM variant_units ts WHERE ts.variant_id=v.id AND ts.unit='table sheet' AND ts.factor=1)
       THEN 'Table Sheets' ELSE v.unit END AS display_unit,
