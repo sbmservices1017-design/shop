@@ -1,3 +1,12 @@
+# ShopDesk Pro v0.9.1 — Build fix for Dart constant test arguments
+
+This package is the FULL v0.9.0 Flutter source, with a focused fix for GitHub Actions Static Analyzer errors in `test/store_test.dart`.
+Three tests created `const ItemLine(vid, ...)` using an ID returned by SQLite at runtime. Those are not compile-time constants. Removed only the `const` modifier on lines 45, 48 and 70 (prior numbering).
+
+**Business logic is unchanged:** existing POS, conversion rules, stock, customer/supplier ledgers, payroll, licensing, branding and accounts are retained.
+
+**Validation:** local code difference and ZIP integrity confirmed. Flutter analyzer/tests/Windows EXE must still run in GitHub Actions; this environment has no Flutter SDK.
+
 # ShopDesk Pro v0.9.0 — Multi-Unit POS & Custom Payment Accounts
 
 Client change details, unit conversion precautions, data migration and acceptance checklist: `docs/CLIENT_MULTIUNIT_UPGRADE_V0_9.md`.

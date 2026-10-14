@@ -42,10 +42,10 @@ void main(){
     expect((await s.unitOptions(vid,sale:false)).any((r)=>r['unit']=='roll'),true);
     expect((await s.unitOptions(vid,sale:true)).any((r)=>r['unit']=='roll'),false);
     final purchase=await s.postDocument('purchase',supplier,nowDate(),
-      [const ItemLine(vid,2,1000,unit:'roll',factor:100)],0,cash);
+      [ItemLine(vid,2,1000,unit:'roll',factor:100)],0,cash);
     expect(numVal((await s.stock()).firstWhere((r)=>r['id']==vid)['qty']),200);
     final sale=await s.postDocument('sale',customer,nowDate(),
-      [const ItemLine(vid,5,250,unit:'gazz',factor:3)],0,cash);
+      [ItemLine(vid,5,250,unit:'gazz',factor:3)],0,cash);
     expect(numVal((await s.stock()).firstWhere((r)=>r['id']==vid)['qty']),185);
     final line=(await s.read('SELECT id FROM document_lines WHERE document_id=?',[sale])).first['id'] as int;
     final ret=await s.postReturn(sale,[ReturnItem(line,1)],0,cash,'One gazz returned');
@@ -67,7 +67,7 @@ void main(){
     final customer=await s.addParty('customer','Packet Buyer','','');
     final wallet=await s.addPaymentAccount('1098','Owner Wallet','wallet');
     final purchase=await s.postDocument('purchase',supplier,nowDate(),
-      [const ItemLine(vid,4,1500,unit:'packet',factor:12)],0,wallet);
+      [ItemLine(vid,4,1500,unit:'packet',factor:12)],0,wallet);
     final sale=await s.postDocument('sale',customer,nowDate(),
       [ItemLine(vid,7,150)],1050,wallet);
     expect(numVal((await s.stock()).firstWhere((r)=>r['id']==vid)['qty']),41);
