@@ -7,6 +7,7 @@ import 'commercial_core.dart';
 import 'commercial_ui.dart';
 import 'license_widgets.dart';
 import 'store.dart';
+import 'database_reset.dart';
 import 'extensions.dart'; // ShopDeskExtendedOperations.verifyDatabase
 import 'nexa_theme.dart';
 
@@ -23,6 +24,7 @@ class _SettingsHubState extends State<SettingsHub> {
     (title:'License Activation',icon:Icons.key_outlined),
     (title:'Invoice Serial Numbers',icon:Icons.numbers_outlined),
     (title:'System Information',icon:Icons.info_outline),
+    (title:'Clear Shop Database',icon:Icons.delete_forever_outlined),
   ];
   @override Widget build(BuildContext context){
     if(CommercialCore.instance.current?.isAdmin!=true)return const Center(child:Text('Administrator access is required for settings.'));
@@ -32,7 +34,8 @@ class _SettingsHubState extends State<SettingsHub> {
       2=>const BackupSettings(),
       3=>const LicenseSettings(),
       4=>const InvoiceSerialSettings(),
-      _=>const SystemInfo(),
+      5=>const SystemInfo(),
+      _=>const DatabaseClearSettings(),
     };
     return Theme(data:Theme.of(context).copyWith(
       brightness:Brightness.light,
@@ -128,8 +131,8 @@ class _LicenseSettingsState extends State<LicenseSettings>{
 }
 class SystemInfo extends StatelessWidget{const SystemInfo({super.key});
   @override Widget build(BuildContext context)=>ListView(padding:const EdgeInsets.all(22),children:[Card(child:Padding(padding:const EdgeInsets.all(24),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-    const Text('ShopDesk Pro v0.8.0',style:TextStyle(fontSize:19,fontWeight:FontWeight.w800)),const SizedBox(height:14),const Text('Flutter · Windows desktop · offline SQLite'),const SizedBox(height:10),
-    const Text('Shop Profile → Users & Permissions → Backup & Restore → License Activation → Invoice Serial Numbers → System Information',style:TextStyle(color:Colors.blueGrey)),
+    const Text('ShopDesk Pro v0.9.11',style:TextStyle(fontSize:19,fontWeight:FontWeight.w800)),const SizedBox(height:14),const Text('Flutter · Windows desktop · offline SQLite'),const SizedBox(height:10),
+    const Text('Shop Profile → Users & Permissions → Backup & Restore → License Activation → Invoice Serial Numbers → System Information → Clear Shop Database',style:TextStyle(color:Colors.blueGrey)),
     const SizedBox(height:16),SelectableText(Store.instance.dbPath),
     const SizedBox(height:16),const Text('This software should be run through the GitHub Windows build and tested with copied customer data before deploying to a live shop.',style:TextStyle(color:Colors.blueGrey,fontSize:12)),
   ])))]);
@@ -188,4 +191,56 @@ class _InvoiceSerialSettingsState extends State<InvoiceSerialSettings> {
     const SizedBox(height:20),Align(alignment:Alignment.centerLeft,child:FilledButton.icon(onPressed:saving?null:save,icon:const Icon(Icons.save),label:const Text('Save Invoice Number Settings'))),
     if(message.isNotEmpty)Padding(padding:const EdgeInsets.only(top:16),child:SelectableText(message)),
   ])))]);
+}
+
+/// Admin-only destructive operation with explicit confirmation and backup.
+class DatabaseClearSettings extends StatefulWidget {
+  const DatabaseClearSettings({super.key});
+  @override State<DatabaseClearSettings> createState()=>_DatabaseClearSettingsState();
+}
+class _DatabaseClearSettingsState extends State<DatabaseClearSettings> {
+  final pin=TextEditingController(),confirmation=TextEditingController();
+  bool working=false;
+  String notice='';
+  @override void dispose(){pin.dispose();confirmation.dispose();super.dispose();}
+  Future<void> clearData() async {
+    if(confirmation.text.trim()!='DELETE ALL DATA'){
+      setState(()=>notice='Type DELETE ALL DATA to confirm irreversible shop data removal.');
+      return;
+    }
+    final allowed=CommercialCore.instance.current?.isAdmin==true;
+    if(!allowed){setState(()=>notice='Administrator login required.');return;}
+    final yes=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+      title:const Text('FINAL CONFIRMATION • CLEAR ALL SHOP DATA'),
+      content:const Text('All Products, Stock, Sales, Purchases, Returns, Customers, Suppliers, Expenses, Employees, Payroll and Financial Transactions will be erased from the LIVE database. Login accounts and activated license remain. An automatic backup will be created first.'),
+      actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),
+        FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Back up and CLEAR'))]));
+    if(yes!=true)return;
+    setState(()=>working=true);
+    try {
+      final backup=await ShopDataReset.clear(pin:pin.text,administrator:allowed);
+      if(mounted)setState(()=>notice='Shop data cleared successfully. Automatic backup: $backup\nRestart ShopDesk to refresh all modules.');
+      pin.clear();confirmation.clear();
+    }catch(e){if(mounted)setState(()=>notice='$e');}
+    finally{if(mounted)setState(()=>working=false);}
+  }
+  @override Widget build(BuildContext context)=>ListView(padding:const EdgeInsets.all(22),children:[
+    Card(child:Padding(padding:const EdgeInsets.all(24),child:Column(
+      crossAxisAlignment:CrossAxisAlignment.start,children:[
+        const Text('Clear Shop Database',style:TextStyle(fontSize:20,fontWeight:FontWeight.bold)),
+        const SizedBox(height:12),
+        const Text('Deletes ALL SHOP/BUSINESS RECORDS (including invoices, returns, stock, accounts transactions, employees and payroll). It does NOT reset owner login, license or 48-hour trial. A SQLite backup is saved automatically.',style:TextStyle(color:Colors.deepOrange)),
+        const SizedBox(height:20),
+        TextField(controller:pin,obscureText:true,maxLength:5,keyboardType:TextInputType.number,
+          inputFormatters:[FilteringTextInputFormatter.digitsOnly,LengthLimitingTextInputFormatter(5)],
+          decoration:const InputDecoration(labelText:'Owner 5-digit PIN')),
+        const SizedBox(height:10),
+        TextField(controller:confirmation,decoration:const InputDecoration(labelText:'Type DELETE ALL DATA')),
+        const SizedBox(height:14),
+        FilledButton.icon(onPressed:working?null:clearData,icon:const Icon(Icons.delete_forever),
+          label:const Text('Create backup and clear database')),
+        if(working)const LinearProgressIndicator(),
+        if(notice.isNotEmpty)Padding(padding:const EdgeInsets.only(top:14),child:SelectableText(notice)),
+      ]))),
+  ]);
 }

@@ -3,11 +3,14 @@ import 'dart:math' as math;
 import 'store.dart';
 import 'reporting.dart';
 import 'commercial_core.dart';
+import 'package:flutter/services.dart';
 
 class ModernPosScreen extends StatefulWidget {
   final String kind;final VoidCallback onChange;
+  final ValueChanged<bool>? onCartChanged;
   final Future<void> Function(int invoiceId)? onCorrectInvoice;
-  const ModernPosScreen({super.key,required this.kind,required this.onChange,this.onCorrectInvoice});
+  const ModernPosScreen({super.key,required this.kind,required this.onChange,
+    this.onCartChanged,this.onCorrectInvoice});
   @override State<ModernPosScreen> createState()=>_ModernPosScreenState();
 }
 String shopUnit(String unit)=>switch(unit.toLowerCase()){'pcs'=>'Piece','ft'=>'Feet','gazz'=>'Gazz','set'=>'Set','packet'=>'Packet','roll'=>'Roll','table sheet'=>'Table Sheet',_=>unit};
@@ -31,6 +34,7 @@ class _ExtraPaymentRow {
 class _ModernPosScreenState extends State<ModernPosScreen>{
   final store=Store.instance;
   final search=TextEditingController(),paid=TextEditingController(text:'0'),notes=TextEditingController();
+  final productSearchFocus=FocusNode(debugLabel:'pos-product-search');
   final cartScroll=ScrollController(),paymentScroll=ScrollController();
   bool showPaymentDetails=false;
   List<Map<String,Object?>> catalog=[];Map<int,String> parties={};Map<int,String> accounts={};Map<int,List<Map<String,Object?>>> availableUnits={};
@@ -39,7 +43,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
   String category='All',date=nowDate();int? partyId,accountId;bool busy=false;String? error;
   bool get sale=>widget.kind=='sale';
   @override void initState(){super.initState();load();}
-  @override void dispose(){search.dispose();paid.dispose();notes.dispose();cartScroll.dispose();paymentScroll.dispose();for(final row in cart)row.dispose();for(final row in extraPayments)row.dispose();super.dispose();}
+  @override void dispose(){productSearchFocus.dispose();search.dispose();paid.dispose();notes.dispose();cartScroll.dispose();paymentScroll.dispose();for(final row in cart)row.dispose();for(final row in extraPayments)row.dispose();super.dispose();}
   Future<void> load()async{
     final c=await store.stock();
     final p=await store.read('SELECT id,name FROM parties WHERE kind=? AND active=1 ORDER BY name',[sale?'customer':'supplier']);
@@ -92,6 +96,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
       }
       setState(()=>cart.insert(0,newRow));
     }
+    widget.onCartChanged?.call(cart.isNotEmpty);
     WidgetsBinding.instance.addPostFrameCallback((_){if(cartScroll.hasClients)cartScroll.jumpTo(0);});
   }
   Future<void> chooseVariant(Map<String,Object?> product) async {
@@ -155,6 +160,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
       final saved=List<_CartRow>.of(cart);
       final oldPayments=List<_ExtraPaymentRow>.of(extraPayments);
       setState((){cart.clear();extraPayments.clear();paid.text='0';notes.clear();error=null;});
+      widget.onCartChanged?.call(false);
       for(final r in saved)r.dispose();
       for(final r in oldPayments)r.dispose();
       await load();
@@ -165,6 +171,10 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
     }catch(e){if(mounted)setState(()=>error='$e');}
     finally{if(mounted)setState(()=>busy=false);}
   }
+  void focusProductSearch(){
+    productSearchFocus.requestFocus();
+    search.selection=TextSelection(baseOffset:0,extentOffset:search.text.length);
+  }
   @override Widget build(BuildContext context){
     final query=search.text.toLowerCase();
     final filtered=catalog.where((p)=>(category=='All'||p['category']==category)&&('${p['product']} ${p['sku']} ${p['attrs']}').toLowerCase().contains(query)).toList();
@@ -172,13 +182,20 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
     final grouped=<int,Map<String,Object?>>{};
     for(final item in filtered){grouped.putIfAbsent(item['product_id'] as int,()=>item);}
     final displayProducts=grouped.values.toList();
-    return LayoutBuilder(builder:(ctx,layout)=>Padding(padding:const EdgeInsets.all(12),child:Column(children:[
-      Row(children:[Icon(sale?Icons.point_of_sale:Icons.local_shipping_outlined,color:const Color(0xFF4B63D9),size:26),const SizedBox(width:10),Expanded(child:Text(sale?'Sales POS · Manual Billing':'Purchase POS · Stock In',style:const TextStyle(fontSize:20,fontWeight:FontWeight.w800))),const SizedBox.shrink()]),const SizedBox(height:12),
+    return CallbackShortcuts(bindings:<ShortcutActivator,VoidCallback>{
+      const SingleActivator(LogicalKeyboardKey.keyF,control:true):focusProductSearch,
+      const SingleActivator(LogicalKeyboardKey.keyS,control:true):(){if(!busy)submit();},
+      const SingleActivator(LogicalKeyboardKey.f6):()=>setState(()=>showPaymentDetails=!showPaymentDetails),
+    },child:Focus(autofocus:true,child:LayoutBuilder(builder:(ctx,layout)=>Padding(padding:const EdgeInsets.all(12),child:Column(children:[
+      Row(children:[Icon(sale?Icons.point_of_sale:Icons.local_shipping_outlined,color:const Color(0xFF4B63D9),size:26),const SizedBox(width:10),Expanded(child:Text(sale?'Sales POS · Manual Billing':'Purchase POS · Stock In',style:const TextStyle(fontSize:20,fontWeight:FontWeight.w800))),const Text('Ctrl+F Search  •  F6 Payments  •  Ctrl+S Save',style:TextStyle(fontSize:11,color:Color(0xFF58708B)))]),const SizedBox(height:12),
       Expanded(child:layout.maxWidth>1000?Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(flex:4,child:catalogPane(displayProducts,cats)),const SizedBox(width:12),Expanded(flex:6,child:cartPane())]):ListView(children:[SizedBox(height:400,child:catalogPane(displayProducts,cats)),const SizedBox(height:12),SizedBox(height:650,child:cartPane())]))
-    ])));
+    ])))));
   }
   Widget catalogPane(List<Map<String,Object?>> filtered,List<String> categories)=>Card(child:Padding(padding:const EdgeInsets.all(15),child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-    TextField(controller:search,onChanged:(_)=>setState((){}),decoration:const InputDecoration(prefixIcon:Icon(Icons.search),labelText:'Search Product / Size / Color')),const SizedBox(height:12),
+    TextField(key:const Key('pos-product-search'),focusNode:productSearchFocus,
+      controller:search,onChanged:(_)=>setState((){}),
+      onSubmitted:(_){if(filtered.isNotEmpty)chooseVariant(filtered.first);},
+      decoration:const InputDecoration(prefixIcon:Icon(Icons.search),labelText:'Search Product / Size / Color  (Ctrl+F)')),const SizedBox(height:12),
     SizedBox(height:48,child:ListView(scrollDirection:Axis.horizontal,children:categories.map((c)=>Padding(padding:const EdgeInsets.only(right:8),child:ChoiceChip(label:Text(c),selected:c==category,onSelected:(_)=>setState(()=>category=c)))).toList())),
     const SizedBox(height:6),Expanded(child:filtered.isEmpty?const Center(child:Text('No matching variations')):ListView.builder(itemCount:filtered.length,itemBuilder:(ctx,i){final p=filtered[i];final qty=numVal(p['qty']);return Card(color:const Color(0xFFF6F8FD),child:ListTile(onTap:()=>chooseVariant(p),title:Text('${p['product']}',style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text('${p['category']} • Tap to choose variation\n${catalog.where((v)=>v['product_id']==p['product_id']).length} variations available',style:TextStyle(color:qty<0?Colors.deepOrange:Colors.blueGrey)),isThreeLine:true,trailing:FilledButton.icon(onPressed:()=>chooseVariant(p),icon:const Icon(Icons.add_shopping_cart,size:19),label:const Text('Add to Cart'),style:FilledButton.styleFrom(minimumSize:const Size(130,46)))));}))
   ])));
@@ -213,7 +230,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
       style:const TextStyle(fontWeight:FontWeight.w800,fontSize:11,color:Color(0xFF134C93)));
     final remove=IconButton(tooltip:'Remove from cart',visualDensity:VisualDensity.compact,
       constraints:const BoxConstraints.tightFor(width:30,height:34),padding:EdgeInsets.zero,
-      onPressed:(){setState(()=>cart.remove(row));row.dispose();},
+      onPressed:(){setState(()=>cart.remove(row));row.dispose();widget.onCartChanged?.call(cart.isNotEmpty);},
       icon:const Icon(Icons.close_rounded,size:17,color:Color(0xFFBA3A3A)));
     return Container(key:ValueKey('compact-cart-$id'),
       margin:const EdgeInsets.only(bottom:4),padding:const EdgeInsets.symmetric(horizontal:7,vertical:5),
@@ -319,7 +336,7 @@ class _ModernPosScreenState extends State<ModernPosScreen>{
         FilledButton.icon(onPressed:busy || CommercialCore.instance.current?.allowed(
           sale?'Sales / Billing':'Purchases','create')!=true?null:submit,
           icon:const Icon(Icons.check_circle_outline,size:20),
-          label:Text(busy?'Saving...':sale?'Save Sale & Deduct Stock':'Save Purchase & Add Stock'),
+          label:Text(busy?'Saving...':sale?'Save Sale & Deduct Stock  (Ctrl+S)':'Save Purchase & Add Stock  (Ctrl+S)'),
           style:FilledButton.styleFrom(minimumSize:const Size.fromHeight(42))),
       ]);
     })));
@@ -332,10 +349,10 @@ class _HistoryPane extends StatelessWidget {
   const _HistoryPane({required this.kind,required this.onBack,required this.onChange,this.onCorrectInvoice});
   Future<void> reprint(int id)async{
     final rows=await Store.instance.read('''SELECT p.name AS Product,v.sku AS SKU,l.qty AS Quantity,coalesce(u.unit,v.unit) AS Unit,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount
-      FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=?''',[id]);
+      FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? AND l.is_current=1''',[id]);
     await Exports.pdf(ReportResult('Invoice #$id',const ['Product','SKU','Quantity','Unit','Rate','Amount'],rows.map((r)=>['${r['Product']}','${r['SKU']}','${r['Quantity']}','${r['Unit']}','${r['Rate']}','${r['Amount']}']).toList()),print:true);
   }
-  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:Store.instance.read('''SELECT d.*,coalesce(p.name,'Walk-in') AS party FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE d.kind=? ORDER BY d.id DESC LIMIT 150''',[kind]),builder:(ctx,snap){
+  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:Store.instance.read('''SELECT d.*,coalesce(p.name,'Walk-in') AS party FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE d.kind=? AND d.status='POSTED' ORDER BY d.id DESC LIMIT 150''',[kind]),builder:(ctx,snap){
     if(!snap.hasData)return const Center(child:CircularProgressIndicator());
     return Card(child:ListView(children:[
       ListTile(title:const Text('Recent invoices',style:TextStyle(fontSize:18,fontWeight:FontWeight.bold)),trailing:TextButton(onPressed:onBack,child:const Text('New invoice'))),
@@ -353,7 +370,7 @@ class _HistoryPane extends StatelessWidget {
               IconButton(tooltip:'Delete / cancel invoice',onPressed:()async{
                 final proceed=await showDialog<bool>(context:context,builder:(dialog)=>AlertDialog(title:const Text('Void invoice?'),content:const Text('Stock and accounting postings will be reversed.'),actions:[TextButton(onPressed:()=>Navigator.pop(dialog,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(dialog,true),child:const Text('Void'))]));
                 if(proceed==true){
-                  try{await Store.instance.voidDocument(d['id'] as int);onChange();}
+                  try{await Store.instance.cancelInvoiceSafely(d['id'] as int);onChange();}
                   catch(e){if(context.mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$e')));}
                 }
               },icon:const Icon(Icons.block))

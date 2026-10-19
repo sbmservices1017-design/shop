@@ -33,7 +33,7 @@ const schema = <String>[
 '''CREATE TABLE IF NOT EXISTS variant_values(variant_id INTEGER NOT NULL REFERENCES variants(id),attribute_id INTEGER NOT NULL REFERENCES attributes(id),value TEXT NOT NULL,PRIMARY KEY(variant_id,attribute_id))''',
 '''CREATE TABLE IF NOT EXISTS parties(id INTEGER PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('customer','supplier')),name TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',address TEXT NOT NULL DEFAULT '',active INTEGER NOT NULL DEFAULT 1)''',
 '''CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('sale','purchase')),invoice TEXT NOT NULL UNIQUE,party_id INTEGER REFERENCES parties(id),date TEXT NOT NULL,total INTEGER NOT NULL DEFAULT 0,paid INTEGER NOT NULL DEFAULT 0,notes TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'POSTED' CHECK(status IN ('POSTED','VOID')))''',
-'''CREATE TABLE IF NOT EXISTS document_lines(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES documents(id),variant_id INTEGER NOT NULL REFERENCES variants(id),qty REAL NOT NULL CHECK(qty>0),rate INTEGER NOT NULL CHECK(rate>=0),amount INTEGER NOT NULL CHECK(amount>=0))''',
+'''CREATE TABLE IF NOT EXISTS document_lines(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES documents(id),variant_id INTEGER NOT NULL REFERENCES variants(id),qty REAL NOT NULL CHECK(qty>0),rate INTEGER NOT NULL CHECK(rate>=0),amount INTEGER NOT NULL CHECK(amount>=0),is_current INTEGER NOT NULL DEFAULT 1)''',
 '''CREATE TABLE IF NOT EXISTS variant_units(variant_id INTEGER NOT NULL REFERENCES variants(id),unit TEXT NOT NULL COLLATE NOCASE,factor REAL NOT NULL CHECK(factor>0),can_buy INTEGER NOT NULL DEFAULT 1,can_sell INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(variant_id,unit))''',
 '''CREATE TABLE IF NOT EXISTS document_line_units(line_id INTEGER PRIMARY KEY REFERENCES document_lines(id) ON DELETE CASCADE,unit TEXT NOT NULL,factor REAL NOT NULL CHECK(factor>0))''',
 '''CREATE TABLE IF NOT EXISTS payment_accounts(account_id INTEGER PRIMARY KEY REFERENCES accounts(id),kind TEXT NOT NULL CHECK(kind IN ('cash','bank','wallet')),holder_name TEXT NOT NULL DEFAULT '')''',
@@ -96,6 +96,19 @@ class Store {
       ['3000','Opening Equity','equity'],['4000','Sales Revenue','revenue'],
       ['5000','Cost of Sales','expense'],['6100','Operating Expense','expense'],['6200','Salary Expense','expense']
     ]) {await db.rawInsert('INSERT OR IGNORE INTO accounts(code,name,type) VALUES(?,?,?)',a);}
+    // Historic returned lines must remain FK-valid during subsequent invoice edits.
+    final documentLineColumns=await db.rawQuery('PRAGMA table_info(document_lines)');
+    if(!documentLineColumns.any((c)=>c['name']=='is_current')){
+      await db.execute('ALTER TABLE document_lines ADD COLUMN is_current INTEGER NOT NULL DEFAULT 1');
+    }
+    // Account list creation date; legacy accounts receive the earliest activity date.
+    final accountColumns=await db.rawQuery('PRAGMA table_info(accounts)');
+    if(!accountColumns.any((c)=>c['name']=='created_at')) {
+      await db.execute('ALTER TABLE accounts ADD COLUMN created_at TEXT');
+    }
+    await db.execute("""UPDATE accounts SET created_at=COALESCE(
+      (SELECT MIN(j.date) FROM journal_lines l JOIN journal j ON j.id=l.journal_id
+       WHERE l.account_id=accounts.id), date('now')) WHERE created_at IS NULL""");
     await db.rawInsert("INSERT OR IGNORE INTO expense_categories(name) VALUES('General')");
     // Safe repeated migration; never change historical stock on upgrade.
     await db.execute("INSERT OR IGNORE INTO payment_accounts(account_id,kind) SELECT id,CASE WHEN code='1000' THEN 'cash' ELSE 'bank' END FROM accounts WHERE code IN ('1000','1010')");
@@ -404,7 +417,7 @@ class Store {
         await t.rawInsert('''INSERT INTO app_settings(key,value) VALUES('payment_account_sequence',?)
           ON CONFLICT(key) DO UPDATE SET value=excluded.value''',['$next']);
       }
-      final id=await t.rawInsert('INSERT INTO accounts(code,name,type) VALUES(?,?,?)',[finalCode,name.trim(),'asset']);
+      final id=await t.rawInsert('INSERT INTO accounts(code,name,type,created_at) VALUES(?,?,?,?)',[finalCode,name.trim(),'asset',nowDate()]);
       await t.rawInsert('INSERT INTO payment_accounts(account_id,kind,holder_name) VALUES(?,?,?)',
         [id,kind,holderName.trim()]);
       await audit(t,'ADD','payment_account',id,'$finalCode ${name.trim()} · ${holderName.trim()}');
@@ -425,8 +438,8 @@ class Store {
       final next=(highest>last?highest:last)+1;
       final code='GL-${next.toString().padLeft(6,'0')}';
       await t.rawInsert("INSERT INTO app_settings(key,value) VALUES('ledger_account_sequence',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",['$next']);
-      final id=await t.rawInsert('INSERT INTO accounts(code,name,type) VALUES(?,?,?)',
-        [code,name.trim(),type]);
+      final id=await t.rawInsert('INSERT INTO accounts(code,name,type,created_at) VALUES(?,?,?,?)',
+        [code,name.trim(),type,nowDate()]);
       await audit(t,'ADD','account',id,'$code ${name.trim()}');
       return id;
     });
@@ -560,8 +573,15 @@ class Store {
         id=existingId;
         await t.rawUpdate('UPDATE document_payment_parts SET active=0 WHERE document_id=?',[id]);
         await t.rawUpdate("UPDATE documents SET kind=?,invoice=?,party_id=?,date=?,total=?,paid=?,notes=?,status='POSTED' WHERE id=?",[kind,ref,partyId,date,total,money,notes,id]);
-        await t.rawDelete('DELETE FROM document_line_units WHERE line_id IN (SELECT id FROM document_lines WHERE document_id=?)',[id]);
-        await t.rawDelete('DELETE FROM document_lines WHERE document_id=?',[id]);
+        // Preserve old invoice lines with linked return history (including voided
+        // returns) for foreign-key integrity. Archived rows are hidden everywhere
+        // except historical return details and audit/revision records.
+        await t.rawUpdate('UPDATE document_lines SET is_current=0 WHERE document_id=?',[id]);
+        await t.rawDelete('''DELETE FROM document_line_units WHERE line_id IN (
+          SELECT id FROM document_lines WHERE document_id=?
+            AND id NOT IN (SELECT source_line_id FROM return_lines))''',[id]);
+        await t.rawDelete('''DELETE FROM document_lines WHERE document_id=?
+          AND id NOT IN (SELECT source_line_id FROM return_lines)''',[id]);
       }else{
         id=await t.rawInsert('INSERT INTO documents(kind,invoice,party_id,date,total,paid,notes) VALUES(?,?,?,?,?,?,?)',[kind,ref,partyId,date,total,money,notes]);
       }
@@ -597,6 +617,24 @@ class Store {
       return id;
     }
   }
+  /// Invoice cancellation keeps customer/supplier receipts as unapplied credit.
+  /// Linked active returns must first be cancelled to avoid an invalid reversal.
+  /// All changes occur in one SQLite transaction, including stock + journals.
+  Future<void> cancelInvoiceSafely(int id) async => db.transaction((t)async {
+    final existing=await t.rawQuery("SELECT * FROM documents WHERE id=? AND status='POSTED'",[id]);
+    if(existing.isEmpty)throw const FormatException('Invoice already cancelled or not found');
+    final returns=await t.rawQuery("SELECT id FROM document_returns WHERE document_id=? AND status='POSTED' LIMIT 1",[id]);
+    if(returns.isNotEmpty)throw const FormatException('This invoice has an active return. Cancel the linked return first, then delete this invoice.');
+    final allocations=await t.rawQuery('SELECT receipt_id,amount FROM receipt_allocations WHERE document_id=?',[id]);
+    if(allocations.isNotEmpty){
+      final totalAllocated=allocations.fold<int>(0,(n,r)=>n+(r['amount'] as int));
+      // Release allocations without deleting real-world payments; retain them as unapplied credit.
+      await t.rawDelete('DELETE FROM receipt_allocations WHERE document_id=?',[id]);
+      await t.rawUpdate('UPDATE documents SET paid=paid-? WHERE id=?',[totalAllocated,id]);
+      await audit(t,'UNALLOCATE','invoice',id,'Released $totalAllocated paisa into unapplied customer/supplier credit');
+    }
+    await _voidDocumentTxn(t,id);
+  });
   Future<void> voidDocument(int id) async => db.transaction((t)=>_voidDocumentTxn(t,id));
   Future<void> _voidDocumentTxn(Transaction t,int id,{String? reversalDate}) async {
     final ds=await t.rawQuery("SELECT * FROM documents WHERE id=? AND status='POSTED'",[id]);
@@ -607,7 +645,7 @@ class Store {
     if(attached.isNotEmpty)throw const FormatException('Void or reverse linked returns first');
     final d=ds.first;final kind=d['kind'] as String;final date=reversalDate??nowDate();
     await t.rawUpdate("UPDATE documents SET status='VOID' WHERE id=?",[id]);
-    final lines=await t.rawQuery('SELECT l.*,coalesce(u.factor,1) AS stock_factor FROM document_lines l LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=?',[id]);
+    final lines=await t.rawQuery('SELECT l.*,coalesce(u.factor,1) AS stock_factor FROM document_lines l LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? AND l.is_current=1',[id]);
     for(final x in lines){await t.rawInsert('INSERT INTO stock_movements(variant_id,qty,source_type,source_id,date,note) VALUES(?,?,?,?,?,?)',[x['variant_id'],numVal(x['qty'])*numVal(x['stock_factor'])*(kind=='sale'?1:-1),'void_$kind',id,date,'Void invoice']);}
     final ledger=await t.rawQuery("SELECT * FROM party_ledger WHERE source_id=? AND source_type IN ('sale','purchase','sale_payment','purchase_payment')",[id]);
     for(final l in ledger){await t.rawInsert('INSERT INTO party_ledger(party_id,debit,credit,source_type,source_id,date,note,payment_account_id) VALUES(?,?,?,?,?,?,?,?)',[l['party_id'],l['credit'],l['debit'],'void_$kind',id,date,'Reversal',l['payment_account_id']]);}
@@ -623,15 +661,25 @@ class Store {
   Future<int> reviseDocument(int oldId,String kind,int? partyId,String date,List<ItemLine> items,double paid,int paymentAccount,{String notes=''}) async => db.transaction((t)async{
     final originals=await t.rawQuery("SELECT * FROM documents WHERE id=? AND status='POSTED'",[oldId]);
     if(originals.isEmpty||originals.first['kind']!=kind)throw const FormatException('Posted invoice not found');
-    final splitRows=await t.rawQuery('SELECT id FROM document_payment_parts WHERE document_id=? AND active=1',[oldId]);
-    if(splitRows.length>1)throw const FormatException(
-      'This invoice has multiple payment methods. Reverse/re-enter payments through the dedicated correction flow; do not overwrite the individual account entries.');
+    final splitRows=await t.rawQuery('SELECT account_id,amount FROM document_payment_parts WHERE document_id=? AND active=1 ORDER BY id',[oldId]);
     final original=originals.first;
-    final oldLines=await t.rawQuery('SELECT l.variant_id,l.qty,l.rate,l.amount,coalesce(u.unit,v.unit) AS unit,coalesce(u.factor,1) AS factor FROM document_lines l JOIN variants v ON v.id=l.variant_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? ORDER BY l.id',[oldId]);
-    final oldReturns=await t.rawQuery('''SELECT 1 FROM return_lines rl JOIN document_lines dl ON dl.id=rl.source_line_id WHERE dl.document_id=? LIMIT 1''',[oldId]);
-    if(oldReturns.isNotEmpty)throw const FormatException('This invoice has return history. Contact administrator for a separate adjustment; invoice lines cannot be replaced.');
+    final installments=await t.rawQuery('SELECT receipt_id,amount FROM receipt_allocations WHERE document_id=?',[oldId]);
+    final originalInitial=splitRows.fold<int>(0,(n,r)=>n+(r['amount'] as int));
+    final allocated=installments.fold<int>(0,(n,r)=>n+(r['amount'] as int));
+    if(pennies(paid)!=originalInitial+allocated)throw const FormatException(
+      'Correct the invoice items and prices here. To change payment amounts, use installment/payment history instead.');
+    final preservedPayments=splitRows.map((r)=>PaymentPart(r['account_id'] as int,(r['amount'] as int)/100)).toList();
+    final oldLines=await t.rawQuery('SELECT l.variant_id,l.qty,l.rate,l.amount,coalesce(u.unit,v.unit) AS unit,coalesce(u.factor,1) AS factor FROM document_lines l JOIN variants v ON v.id=l.variant_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? AND l.is_current=1 ORDER BY l.id',[oldId]);
+    // Active returns depend on currently posted invoice lines; cancel them first.
+    final activeReturns=await t.rawQuery("SELECT 1 FROM document_returns WHERE document_id=? AND status='POSTED' LIMIT 1",[oldId]);
+    if(activeReturns.isNotEmpty)throw const FormatException('Cancel linked sale/purchase returns before correcting this invoice.');
+    // Historical return links are retained on archived invoice lines.
     await t.rawInsert('''INSERT INTO document_revisions(document_id,changed_at,old_invoice,old_date,old_party_id,old_total,old_paid,old_notes,old_lines_json)
       VALUES(?,?,?,?,?,?,?,?,?)''',[oldId,nowStamp(),original['invoice'],original['date'],original['party_id'],original['total'],original['paid'],original['notes'],jsonEncode(oldLines)]);
+    // Keep actual incoming/outgoing receipts in their bank/wallet ledgers.
+    // Only their invoice allocation is detached during correction, then re-applied.
+    await t.rawDelete('DELETE FROM receipt_allocations WHERE document_id=?',[oldId]);
+    if(allocated>0)await t.rawUpdate('UPDATE documents SET paid=paid-? WHERE id=?',[allocated,oldId]);
     await _voidDocumentTxn(t,oldId,reversalDate:original['date'] as String);
     // Mark the old version's entries so subsequent corrections/voids only
     // reverse the currently posted version.
@@ -641,8 +689,18 @@ class Store {
     }
     await t.rawUpdate('UPDATE journal SET source_type=? WHERE source_id=? AND source_type=?',
       ['superseded_$kind',oldId,kind]);
-    final updated=await _postDocumentTxn(t,kind,partyId,date,items,paid,paymentAccount,notes,
-      existingId:oldId,existingInvoice:original['invoice'] as String);
+    final updated=await _postDocumentTxn(t,kind,partyId,date,items,originalInitial/100,paymentAccount,notes,
+      existingId:oldId,existingInvoice:original['invoice'] as String,payments:preservedPayments);
+    final updatedTotal=(await t.rawQuery('SELECT total FROM documents WHERE id=?',[oldId])).first['total'] as int;
+    var available=(updatedTotal-originalInitial).clamp(0,updatedTotal);
+    for(final r in installments){
+      final portion=(r['amount'] as int)<available?(r['amount'] as int):available;
+      if(portion>0){
+        await t.rawInsert('INSERT INTO receipt_allocations(receipt_id,document_id,amount) VALUES(?,?,?)',[r['receipt_id'],oldId,portion]);
+        await t.rawUpdate('UPDATE documents SET paid=paid+? WHERE id=?',[portion,oldId]);
+        available-=portion;
+      }
+    }
     await audit(t,'REVISE',kind,oldId,'Updated invoice ${original['invoice']} in place');
     return updated;
   });

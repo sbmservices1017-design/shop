@@ -15,6 +15,8 @@ import 'settings_hub.dart';
 import 'license_widgets.dart';
 import 'nexa_theme.dart';
 import 'brand_identity.dart';
+import 'shop_shortcuts.dart';
+import 'package:flutter/services.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -83,6 +85,7 @@ Future<bool> confirm(BuildContext context,String text)async=>(await showDialog<b
 class Shell extends StatefulWidget {const Shell({super.key});@override State<Shell> createState()=>_ShellState();}
 class _ShellState extends State<Shell> {
   int page=0;int revision=0;int previousPage=0;
+  bool posHasPendingCart=false;
   final menu=<({String label,IconData icon})>[
     (label:'Dashboard',icon:Icons.dashboard_rounded),
     (label:'POS',icon:Icons.point_of_sale_rounded),
@@ -107,6 +110,71 @@ class _ShellState extends State<Shell> {
     _=>menu[i].label
   };
   void refresh(){if(mounted)setState(()=>revision++);}
+  Future<void> safeRefresh() async {
+    // Rebuilding the POS destroys unsaved cart controllers. Require consent.
+    if(page==1 && posHasPendingCart){
+      final approved=await confirm(context,
+        'Refresh POS? Unsaved cart items and payment details will be cleared.');
+      if(!approved || !mounted)return;
+    }
+    refresh();
+  }
+  Future<void> openModule(int index,List<int> available) async {
+    // Hotkeys MUST never bypass per-user view permissions.
+    if(!available.contains(index) || !mounted || index==page)return;
+    if(page==1 && posHasPendingCart){
+      final approved=await confirm(context,'Leave POS? Unsaved cart items will be lost.');
+      if(!approved || !mounted)return;
+    }
+    setState(() {
+      if(page!=1)previousPage=page;
+      page=index;
+      if(index!=1)posHasPendingCart=false;
+    });
+  }
+  Future<void> exitPos(List<int> available) async {
+    if(page!=1 || !mounted)return;
+    final target=available.contains(previousPage)&&previousPage!=1
+      ?previousPage:available.firstWhere((i)=>i!=1,orElse:()=>1);
+    if(target!=1)await openModule(target,available);
+  }
+  Future<void> showShortcutHelp() async {
+    await showDialog<void>(context:context,builder:(ctx)=>AlertDialog(
+      title:const Row(children:[Icon(Icons.keyboard_outlined),SizedBox(width:10),
+        Expanded(child:Text('ShopDesk Keyboard Shortcuts'))]),
+      content:SizedBox(width:480,child:ConstrainedBox(
+        constraints:const BoxConstraints(maxHeight:520),child:ListView(shrinkWrap:true,
+          children:[
+            const Text('Navigation',style:TextStyle(fontWeight:FontWeight.w800)),
+            for(final s in shopNavigationShortcuts)
+              ListTile(dense:true,title:Text(s.description),trailing:Text(s.keys,
+                style:const TextStyle(fontWeight:FontWeight.w700))),
+            const Divider(),
+            for(final s in shopOtherShortcuts)
+              ListTile(dense:true,title:Text(s.$2),trailing:Text(s.$1,
+                style:const TextStyle(fontWeight:FontWeight.w700))),
+            const Divider(),
+            const Text('Inside POS',style:TextStyle(fontWeight:FontWeight.w800)),
+            for(final s in shopPosShortcuts)
+              ListTile(dense:true,title:Text(s.$2),trailing:Text(s.$1,
+                style:const TextStyle(fontWeight:FontWeight.w700))),
+            const SizedBox(height:10),
+            const Text('Shortcuts respect module permissions. Ctrl+S saves only after invoice validation.',
+              style:TextStyle(fontSize:12)),
+          ]))),
+      actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))],
+    ));
+  }
+  Widget withHotkeys(Widget content,List<int> available){
+    return CallbackShortcuts(bindings:<ShortcutActivator,VoidCallback>{
+      for(final shortcut in shopNavigationShortcuts)
+        shortcut.activator:()=>openModule(shortcut.pageIndex,available),
+      const SingleActivator(LogicalKeyboardKey.f1):()=>showShortcutHelp(),
+      const SingleActivator(LogicalKeyboardKey.f5):()=>safeRefresh(),
+      const SingleActivator(LogicalKeyboardKey.keyK,control:true):()=>searchModules(available),
+      const SingleActivator(LogicalKeyboardKey.arrowLeft,alt:true):()=>exitPos(available),
+    },child:Focus(autofocus:true,child:content));
+  }
   Future<void> correctPostedInvoice(String kind,int id)async{
     final ok=await showDialog<bool>(context:context,builder:(ctx)=>InvoiceDialog(kind:kind,existingId:id));
     if(ok==true)refresh();
@@ -126,7 +194,8 @@ class _ShellState extends State<Shell> {
     _=>const SettingsHub()};}
   Future<void> searchModules(List<int> available) async {
     final chosen=await showSearch<int?>(context:context,delegate:_ModuleSearchDelegate(menu,available));
-    if(chosen!=null && mounted)setState((){if(page!=1)previousPage=page;page=chosen;});
+    if(chosen!=null && mounted)await openModule(chosen,[for(var i=0;i<menu.length;i++)
+      if(CommercialCore.instance.current?.allowed(moduleKey(i),'view')==true)i]);
   }
   @override Widget build(BuildContext context){
     final core=CommercialCore.instance;
@@ -136,25 +205,27 @@ class _ShellState extends State<Shell> {
     final dark=false;
     // POS occupies the full window: no sidebar, wider cart and dedicated exit controls.
     if(page==1){
-      return Scaffold(backgroundColor:bg,body:Column(children:[
+      return withHotkeys(Scaffold(backgroundColor:bg,body:Column(children:[
         Container(height:69,padding:const EdgeInsets.symmetric(horizontal:20),
           decoration:const BoxDecoration(color:Colors.white,border:Border(bottom:BorderSide(color:Color(0xFFDCE9F9)))),
           child:Row(children:[
-            OutlinedButton.icon(key:const Key('pos-dashboard'),onPressed:available.contains(0)?()=>setState(()=>page=0):null,
+            OutlinedButton.icon(key:const Key('pos-dashboard'),onPressed:available.contains(0)?()=>openModule(0,available):null,
               icon:const Icon(Icons.dashboard_outlined),label:const Text('Dashboard')),
             const SizedBox(width:12),
-            OutlinedButton.icon(key:const Key('pos-back'),onPressed:()=>setState(()=>page=available.contains(previousPage)&&previousPage!=1?previousPage:available.firstWhere((i)=>i!=1,orElse:()=>1)),
+            OutlinedButton.icon(key:const Key('pos-back'),onPressed:()=>exitPos(available),
               icon:const Icon(Icons.arrow_back),label:const Text('Back')),
             const SizedBox(width:17),const Icon(Icons.point_of_sale,color:blue),const SizedBox(width:9),
             const Expanded(child:Text('ShopDesk Pro  •  Full Screen POS',style:TextStyle(fontSize:20,fontWeight:FontWeight.w800,color:ink))),
             const LicenseCountdown(compact:true),const SizedBox(width:16),
-            IconButton(tooltip:'Refresh POS',onPressed:refresh,icon:const Icon(Icons.refresh)),
+            IconButton(tooltip:'Keyboard shortcuts (F1)',onPressed:showShortcutHelp,icon:const Icon(Icons.keyboard_outlined)),
+            IconButton(tooltip:'Refresh POS (F5)',onPressed:safeRefresh,icon:const Icon(Icons.refresh)),
           ])),
-        Expanded(child:KeyedSubtree(key:ValueKey('pos-$revision'),child:PosWorkspace(onChange:refresh))),
+        Expanded(child:KeyedSubtree(key:ValueKey('pos-$revision'),child:PosWorkspace(
+          onChange:refresh,onUnsavedCartChanged:(pending)=>posHasPendingCart=pending))),
         const SbmFooter(),
-      ]));
+      ])),available);
     }
-    return Scaffold(backgroundColor:dark?Nexa.background:bg,body:Row(children:[
+    return withHotkeys(Scaffold(backgroundColor:dark?Nexa.background:bg,body:Row(children:[
       Container(width:237,decoration:const BoxDecoration(color:Nexa.sidebar,border:Border(right:BorderSide(color:Nexa.outline))),child:Column(children:[
         Padding(padding:const EdgeInsets.fromLTRB(23,23,12,29),child:Row(children:[
           Container(padding:const EdgeInsets.all(8),decoration:BoxDecoration(gradient:Nexa.blueGradient,borderRadius:BorderRadius.circular(9)),child:const Icon(Icons.layers_rounded,color:Colors.white,size:23)),
@@ -179,7 +250,8 @@ class _ShellState extends State<Shell> {
         Container(height:63,decoration:BoxDecoration(color:dark?Nexa.header:Colors.white,border:Border(bottom:BorderSide(color:dark?Nexa.outline:const Color(0xFFE8EDF5)))),padding:const EdgeInsets.symmetric(horizontal:22),child:Row(children:[
           Expanded(child:Text(menu[page].label,style:TextStyle(fontSize:18,color:dark?Nexa.white:ink,fontWeight:FontWeight.w800))),
           TextButton.icon(onPressed:()=>searchModules(available),icon:Icon(Icons.search,size:18,color:dark?Nexa.muted:ink),label:Text('Search modules...',style:TextStyle(fontSize:12,color:dark?Nexa.muted:ink))),
-          const SizedBox(width:9),IconButton(tooltip:'Refresh',onPressed:refresh,icon:Icon(Icons.refresh,size:19,color:dark?Nexa.muted:ink)),
+          const SizedBox(width:9),IconButton(tooltip:'Keyboard shortcuts (F1)',onPressed:showShortcutHelp,icon:Icon(Icons.keyboard_outlined,size:19,color:dark?Nexa.muted:ink)),
+          const SizedBox(width:9),IconButton(tooltip:'Refresh (F5)',onPressed:safeRefresh,icon:Icon(Icons.refresh,size:19,color:dark?Nexa.muted:ink)),
           const SizedBox(width:8),const LicenseCountdown(compact:true),const SizedBox(width:8),Container(width:1,height:26,color:dark?Nexa.outline:const Color(0xFFE3E7F0)),const SizedBox(width:12),
           const Icon(Icons.account_circle_outlined,color:Nexa.brightBlue,size:29),const SizedBox(width:9),
           Text(core.current?.username??'',style:TextStyle(color:dark?Nexa.white:ink,fontWeight:FontWeight.w700,fontSize:12)),
@@ -188,27 +260,45 @@ class _ShellState extends State<Shell> {
         Expanded(child:KeyedSubtree(key:ValueKey('$page-$revision'),child:screen())),
         const SbmFooter(),
       ])),
-    ]));
+    ])),available);
   }
 }
 
 
 class PosWorkspace extends StatefulWidget {
   final VoidCallback onChange;
-  const PosWorkspace({super.key,required this.onChange});
+  final ValueChanged<bool>? onUnsavedCartChanged;
+  const PosWorkspace({super.key,required this.onChange,this.onUnsavedCartChanged});
   @override State<PosWorkspace> createState()=>_PosWorkspaceState();
 }
 class _PosWorkspaceState extends State<PosWorkspace> {
   String kind='sale';
+  bool cartPending=false;
+  Future<void> switchKind(String next) async {
+    if(next==kind)return;
+    final module=next=='sale'?'Sales / Billing':'Purchases';
+    if(CommercialCore.instance.current?.allowed(module,'create')!=true)return;
+    if(cartPending){
+      final approved=await confirm(context,
+        'Switch POS mode? Unsaved cart items will be lost.');
+      if(!approved || !mounted)return;
+    }
+    setState((){kind=next;cartPending=false;});
+    widget.onUnsavedCartChanged?.call(false);
+  }
   @override Widget build(BuildContext context)=>Column(children:[
     Padding(padding:const EdgeInsets.fromLTRB(20,14,20,0),child:Row(children:[
       const Text('Point of Sale',style:TextStyle(fontSize:19,fontWeight:FontWeight.w800)),const Spacer(),
       SegmentedButton<String>(segments:const [
         ButtonSegment(value:'sale',label:Text('Sales POS'),icon:Icon(Icons.sell_outlined)),
         ButtonSegment(value:'purchase',label:Text('Purchase POS'),icon:Icon(Icons.local_shipping_outlined))
-      ],selected:{kind},onSelectionChanged:(values)=>setState(()=>kind=values.first)),
+      ],selected:{kind},onSelectionChanged:(values)=>switchKind(values.first)),
     ])),
-    Expanded(child:ModernPosScreen(key:ValueKey(kind),kind:kind,onChange:widget.onChange)),
+    Expanded(child:ModernPosScreen(key:ValueKey(kind),kind:kind,
+      onChange:widget.onChange,onCartChanged:(pending){
+        cartPending=pending;
+        widget.onUnsavedCartChanged?.call(pending);
+      })),
   ]);
 }
 
@@ -375,11 +465,16 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
   late Future<List<Map<String,Object?>>> invoiceFuture;
   @override void initState(){super.initState();invoiceFuture=loadInvoices();}
   Future<List<Map<String,Object?>>> loadInvoices()=>s.read('''SELECT d.*,coalesce(p.name,'Walk-in') AS party FROM documents d
-    LEFT JOIN parties p ON p.id=d.party_id WHERE d.kind=? ORDER BY d.id DESC LIMIT 500''',[widget.kind]);
+    LEFT JOIN parties p ON p.id=d.party_id WHERE d.kind=? AND d.status='POSTED' ORDER BY d.id DESC LIMIT 500''',[widget.kind]);
   @override void dispose(){searchController.dispose();super.dispose();}
 
-  Future<void> create([int? existing]) async {final ok=await showDialog<bool>(context:context,builder:(ctx)=>InvoiceDialog(kind:widget.kind,existingId:existing));if(ok==true)widget.onChange();}
-  Future<void> voidIt(int id)async{try{if(await confirm(context,'Delete / cancel invoice? Stock and ledger entries will be reversed. The original will remain in audit history.')){await s.voidDocument(id);widget.onChange();}}catch(e){if(mounted)await showError(context,e);}}
+  Future<void> create([int? existing]) async {final ok=await showDialog<bool>(context:context,builder:(ctx)=>InvoiceDialog(kind:widget.kind,existingId:existing));if(ok==true && mounted){setState(()=>invoiceFuture=loadInvoices());widget.onChange();}}
+  Future<void> voidIt(int id)async{try{
+    if(await confirm(context,'Cancel this invoice? Stock and journal entries will be reversed. Later customer/supplier payments remain as unapplied credits. Cancel linked returns first.')){
+      await s.cancelInvoiceSafely(id);
+      if(mounted){setState(()=>invoiceFuture=loadInvoices());widget.onChange();}
+    }
+  }catch(e){if(mounted)await showError(context,e);}}
   Future<void> payInvoiceInstallment(Map<String,Object?> invoice)async {
     try{
       final accounts=await accountChoices(s);
@@ -402,7 +497,7 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
     }catch(e){if(mounted)await showError(context,e);}
   }
   Future<void> previewInvoice(Map<String,Object?> row)async{
-    try{final x=await s.read('''SELECT p.name AS Product,v.sku AS SKU,l.qty AS Qty,coalesce(u.unit,v.unit) AS Unit,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=?''',[row['id']]);
+    try{final x=await s.read('''SELECT p.name AS Product,v.sku AS SKU,l.qty AS Qty,coalesce(u.unit,v.unit) AS Unit,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? AND l.is_current=1''',[row['id']]);
       final rpt=ReportResult('Invoice ${row['invoice']}',const ['Product','SKU','Qty','Unit','Rate','Amount'],x.map((r)=>['${r['Product']}','${r['SKU']}','${r['Qty']}','${r['Unit']}','${r['Rate']}','${r['Amount']}']).toList());
       final onBill=await s.read('''SELECT d.date AS date,a.name AS account,p.amount AS amount
         FROM document_payment_parts p JOIN documents d ON d.id=p.document_id
@@ -463,44 +558,116 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
 /// Stock returns, with per-invoice-line quantities and cash/credit refunds.
 class ReturnScreen extends StatefulWidget {final VoidCallback onChange;final String kind;const ReturnScreen({super.key,required this.kind,required this.onChange});
   @override State<ReturnScreen> createState()=>_ReturnScreenState();}
-class _ReturnScreenState extends State<ReturnScreen>{final s=Store.instance;
+class _ReturnScreenState extends State<ReturnScreen>{
+  final s=Store.instance;
   Future<void> change(Future<void> Function() action)async{
-    try{await action();widget.onChange();}catch(e){if(mounted)await showError(context,e);}
+    try{await action();if(mounted){setState((){});widget.onChange();}}
+    catch(e){if(mounted)await showError(context,e);}
   }
-  Future<void> add()async{
+  Future<void> editOrCreate([Map<String,Object?>? existing]) async {
+    final editing=existing!=null;
     final docs=await s.read("SELECT d.id,d.invoice,d.kind,coalesce(p.name,'Walk-in') AS party FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE d.status='POSTED' AND d.kind=? ORDER BY d.id DESC LIMIT 300",[widget.kind]);
     if(docs.isEmpty)throw const FormatException('Create a sale or purchase first');
     if(!mounted)return;
-    final choice=await ask(context,'Select original sale / purchase',[FieldSpec('doc','Invoice',choices:{for(final d in docs)d['id'] as int:'${d['invoice']} • ${d['party']}'})]);
-    if(choice==null)return;
-    final id=int.parse(choice['doc']!);
-    final lines=await s.read('''SELECT l.id,p.name AS product,v.sku,l.qty,l.rate,coalesce(u.unit,v.unit) AS item_unit,
+    int? documentId=existing?['document_id'] as int?;
+    if(documentId==null){
+      final choice=await ask(context,'Select original sale / purchase',[
+        FieldSpec('doc','Invoice',choices:{for(final d in docs)d['id'] as int:'${d['invoice']} • ${d['party']}'})
+      ]);
+      if(choice==null)return;
+      documentId=int.parse(choice['doc']!);
+    }
+    final lines=await s.read('''SELECT l.id,p.name AS product,v.sku,l.qty,l.rate,
+      coalesce(u.unit,v.unit) AS item_unit,
       coalesce((SELECT sum(rl.qty) FROM return_lines rl JOIN document_returns dr ON dr.id=rl.return_id
-      WHERE rl.source_line_id=l.id AND dr.status='POSTED'),0) AS previously_returned
-      FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=?''',[id]);
+        WHERE rl.source_line_id=l.id AND dr.status='POSTED' AND (? IS NULL OR dr.id<>?)),0) AS previously_returned
+      FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id
+      LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? AND l.is_current=1 ORDER BY l.id''',
+      [existing?['id'],existing?['id'],documentId]);
+    final oldItems=editing?await s.read('SELECT source_line_id,qty FROM return_lines WHERE return_id=?',[existing!['id']]):<Map<String,Object?>>[];
+    final prefilled={for(final r in oldItems)r['source_line_id'] as int:numVal(r['qty'])};
     final accounts=await accountChoices(s);
     if(!mounted)return;
     final specs=<FieldSpec>[
-      ...lines.map((l)=>FieldSpec('line_${l['id']}','${l['product']} / ${l['sku']} • remaining ${numVal(l['qty'])-numVal(l['previously_returned'])} ${l['item_unit']}',initial:'0',numeric:true)),
-      const FieldSpec('refund','Refund now Rs. (0 if credit adjustment)',initial:'0',numeric:true),
-      FieldSpec('account','Cash / Bank account',choices:accounts),
-      const FieldSpec('reason','Return reason',initial:'Customer / supplier return')];
-    final f=await ask(context,'Return items by invoice line',specs);
+      ...lines.map((l)=>FieldSpec('line_${l['id']}',
+        '${l['product']} / ${l['sku']} • available ${numVal(l['qty'])-numVal(l['previously_returned'])} ${l['item_unit']}',
+        initial:'${prefilled[l['id']]??0}',numeric:true)),
+      FieldSpec('date','Return date YYYY-MM-DD',initial:editing?'${existing!['date']}':nowDate()),
+      FieldSpec('refund','Refund now Rs. (0 if credit adjustment)',
+        initial:editing?rupees(existing!['refunded']).toStringAsFixed(2):'0',numeric:true),
+      FieldSpec('account','Cash / Bank / Wallet account',choices:accounts,initial:editing?'${existing!['account_id']}':'${accounts.keys.first}'),
+      FieldSpec('reason','Return reason',initial:editing?'${existing!['reason']}':'Customer / supplier return')
+    ];
+    final f=await ask(context,editing?'Edit Return #${existing!['id']}':'Return items by invoice line',specs);
     if(f==null)return;
     final items=<ReturnItem>[];
-    for(final l in lines){final amount=double.parse(f['line_${l['id']}']!);if(amount>0)items.add(ReturnItem(l['id'] as int,amount));}
-    await s.postReturn(id,items,double.parse(f['refund']!),int.parse(f['account']!),f['reason']!);
+    for(final l in lines){final amount=double.parse(f['line_${l['id']}']!);
+      if(amount>0)items.add(ReturnItem(l['id'] as int,amount));}
+    final refund=double.parse(f['refund']!);
+    final account=int.parse(f['account']!);
+    if(editing){await s.reviseReturn(existing!['id'] as int,items,refund,account,f['reason']!,returnDate:f['date']!);}
+    else{await s.postReturn(documentId!,items,refund,account,f['reason']!,returnDate:f['date']!);}
   }
-  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read('''
-    SELECT r.*,d.invoice,d.kind,coalesce(p.name,'Walk-in') AS party FROM document_returns r
-    JOIN documents d ON d.id=r.document_id LEFT JOIN parties p ON p.id=d.party_id WHERE d.kind=? ORDER BY r.id DESC LIMIT 300
-  ''',[widget.kind]),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
-    return pageWrap([section(widget.kind=='sale'?'Sale Returns':'Purchase Returns',action:addButton('New return',()=>change(add))),
-      panel(const Text('Returning a sold item adds stock; returning a purchased item subtracts stock. Partial quantities and refunds are permitted. Posted returns can be reversed with a full audit trail.',style:TextStyle(color:Colors.blueGrey))),
-      listing(['Date','Original invoice','Type','Customer / Supplier','Return Value','Cash Refund','Status','Action'],snap.data!.map((r)=>[
-        txt(r['date']),txt(r['invoice']),txt(r['kind']),txt(r['party']),txt(funds(r['amount'])),txt(funds(r['refunded'])),txt(r['status']),
-        r['status']=='POSTED'?small('Delete return',()=>change(()async{if(await confirm(context,'Delete / cancel return? Stock and ledger entries will be reversed.'))await s.voidReturn(r['id'] as int);}),icon:Icons.delete_outline):txt('—')]).toList())]);
-  });
+  Future<void> viewReturnLedger(Map<String,Object?> record) async {
+    final rows=await s.read('''SELECT l.date,l.source_type,l.debit,l.credit,l.note,
+      coalesce(a.name,'Credit / Adjustment') AS payment_method
+      FROM party_ledger l LEFT JOIN accounts a ON a.id=l.payment_account_id
+      WHERE l.source_id=? AND l.source_type IN (?,?,?,?,?)
+      ORDER BY l.date,l.id''',[record['id'], '${widget.kind}_return', '${widget.kind}_return_refund', 'void_${widget.kind}_return', 'superseded_${widget.kind}_return', 'superseded_${widget.kind}_return_refund']);
+    var running=0;
+    final data=<List<String>>[];
+    for(final l in rows){running+=(l['debit'] as int)-(l['credit'] as int);
+      data.add(['${l['date']}','${l['source_type']}',funds(l['debit']),funds(l['credit']),
+        '${l['payment_method']}',funds(running),'${l['note']}']);}
+    if(data.isEmpty){
+      // Walk-in refunds may not have a party ledger; display the financial journal.
+      final j=await s.read('''SELECT j.date,a.name AS account,jl.debit,jl.credit,j.source_type,j.note
+        FROM journal j JOIN journal_lines jl ON jl.journal_id=j.id
+        JOIN accounts a ON a.id=jl.account_id
+        WHERE j.source_id=? AND j.source_type IN (?,?,?,?) ORDER BY j.id,jl.id''',[record['id'], '${widget.kind}_return', 'void_${widget.kind}_return', 'superseded_${widget.kind}_return', 'superseded_${widget.kind}_return_refund']);
+      running=0;
+      for(final row in j){running+=(row['debit'] as int)-(row['credit'] as int);
+        data.add(['${row['date']}','${row['source_type']}',funds(row['debit']),
+          funds(row['credit']),'${row['account']}',funds(running),'${row['note']}']);}
+    }
+    final report=ReportResult('Return Ledger #${record['id']} • ${record['invoice']}',
+      const ['Date','Transaction','Debit','Credit','Account / Method','Running Balance','Note'],data);
+    if(!mounted)return;
+    final cells=report.rows.map((r)=>r.map((v)=>txt(v)).toList()).toList();
+    await showDialog<void>(context:context,builder:(ctx)=>AlertDialog(
+      title:Text('Return #${record['id']} Ledger'),
+      content:SizedBox(width:960,height:460,
+        child:SingleChildScrollView(scrollDirection:Axis.horizontal,
+          child:SizedBox(width:1250,
+            child:SingleChildScrollView(child:listing(report.headings,cells))))),
+      actions:[TextButton(onPressed:()=>Exports.excel(report),child:const Text('Excel')),
+        TextButton(onPressed:()=>Exports.pdf(report),child:const Text('PDF')),
+        TextButton(onPressed:()=>Exports.pdf(report,print:true),child:const Text('Print A4')),
+        TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))]));
+  }
+  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(
+    future:s.read('''SELECT r.*,d.invoice,d.kind,coalesce(p.name,'Walk-in') AS party
+      FROM document_returns r JOIN documents d ON d.id=r.document_id
+      LEFT JOIN parties p ON p.id=d.party_id
+      WHERE d.kind=? AND r.status='POSTED' ORDER BY r.id DESC LIMIT 300''',[widget.kind]),
+    builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
+      return pageWrap([section(widget.kind=='sale'?'Sale Returns':'Purchase Returns',
+        action:addButton('New return',()=>change(()=>editOrCreate()))),
+        panel(const Text('Edit keeps the original return ID. Deleted returns disappear from this active list, while stock and accounting reversals remain auditable.',style:TextStyle(color:Colors.blueGrey))),
+        listing(['Date','Return #','Original invoice','Customer / Supplier','Return Value','Refund','Actions'],
+          snap.data!.map((r)=>[
+            txt(r['date']),txt(r['id']),txt(r['invoice']),txt(r['party']),
+            txt(funds(r['amount'])),txt(funds(r['refunded'])),buttons([
+              small('Ledger',()=>viewReturnLedger(r),icon:Icons.menu_book_outlined),
+              small('Edit return',()=>change(()=>editOrCreate(r)),icon:Icons.edit_outlined),
+              small('Delete return',()=>change(()async{
+                if(await confirm(context,'Cancel this return? Stock and ledger entries will be reversed.')){
+                  await s.voidReturn(r['id'] as int);
+                }
+              }),icon:Icons.delete_outline),
+            ])
+          ]).toList())]);
+    });
 }
 
 class InvoiceDialog extends StatefulWidget {final String kind;final int? existingId;const InvoiceDialog({super.key,required this.kind,this.existingId});@override State<InvoiceDialog> createState()=>_InvoiceDialogState();}
@@ -519,7 +686,7 @@ class _InvoiceDialogState extends State<InvoiceDialog>{
       final rows=await s.read("SELECT * FROM documents WHERE id=? AND status='POSTED' AND kind=?",[widget.existingId,widget.kind]);
       if(rows.isEmpty)throw const FormatException('Invoice not found or already voided');
       existing=rows.first;
-      oldLines=await s.read('''SELECT l.variant_id,l.qty,l.rate,coalesce(u.unit,v.unit) AS sale_unit,coalesce(u.factor,1) AS factor FROM document_lines l JOIN variants v ON v.id=l.variant_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? ORDER BY l.id''',[widget.existingId]);
+      oldLines=await s.read('''SELECT l.variant_id,l.qty,l.rate,coalesce(u.unit,v.unit) AS sale_unit,coalesce(u.factor,1) AS factor FROM document_lines l JOIN variants v ON v.id=l.variant_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? AND l.is_current=1 ORDER BY l.id''',[widget.existingId]);
       final previousAccounts=await s.read("SELECT jl.account_id FROM journal j JOIN journal_lines jl ON jl.journal_id=j.id JOIN accounts a ON a.id=jl.account_id WHERE j.source_type=? AND j.source_id=? AND a.id IN (SELECT account_id FROM payment_accounts) LIMIT 1",[widget.kind,widget.existingId]);
       if(previousAccounts.isNotEmpty)oldPaymentAccount=previousAccounts.first['account_id'] as int;
     }
@@ -753,7 +920,7 @@ class _AccountsScreenState extends State<AccountsScreen>{final s=Store.instance;
     final f=await ask(context,'Manual journal entry',[FieldSpec('date','Entry Date',initial:nowDate()),FieldSpec('debit','Debit account',choices:ac),FieldSpec('credit','Credit account',choices:ac),const FieldSpec('amount','Amount Rs.',numeric:true),const FieldSpec('note','Notes / reference',mustFill:false)]);
     if(f!=null)await s.manualJournal(f['date']!,int.parse(f['debit']!),int.parse(f['credit']!),double.parse(f['amount']!),f['note']!);
   }
-  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read('''SELECT a.id,a.code,a.name,a.type,pa.holder_name,pa.kind,
+  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read('''SELECT a.id,a.code,a.name,a.type,a.created_at,pa.holder_name,pa.kind,
     coalesce(sum(jl.debit-jl.credit),0) AS dr_balance FROM accounts a
     LEFT JOIN journal_lines jl ON jl.account_id=a.id
     LEFT JOIN payment_accounts pa ON pa.account_id=a.id
@@ -764,8 +931,8 @@ class _AccountsScreenState extends State<AccountsScreen>{final s=Store.instance;
         const FieldSpec('type','Account type (asset / liability / equity / revenue / expense)')]);
       if(f!=null)await s.addLedgerAccount(f['name']!,f['type']!.toLowerCase());
     })),addButton('Cash / bank transfer',()=>change(transfer)),addButton('Manual journal',()=>change(manual))])),
-      listing(['Auto ID / Code','Account','Account holder','Type','Net Dr balance','Actions'],snap.data!.map((a)=>[
-        txt(a['code']),txt(a['name']),txt(a['holder_name']??'—'),txt(a['kind']??a['type']),
+      listing(['Date','Auto ID / Code','Account','Account holder','Type','Net Dr balance','Actions'],snap.data!.map((a)=>[
+        txt(a['created_at']??'—'),txt(a['code']),txt(a['name']),txt(a['holder_name']??'—'),txt(a['kind']??a['type']),
         txt(funds(a['dr_balance'])),buttons([
           small('View Ledger',()=>viewAccountLedger(a),icon:Icons.menu_book),
           if(a['kind']!=null)small('Edit holder / account',()=>change(()=>editPaymentAccount(a)),icon:Icons.edit_outlined),

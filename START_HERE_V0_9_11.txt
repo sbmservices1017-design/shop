@@ -1,0 +1,13 @@
+SHOPDESK PRO v0.9.11 — Sales/Purchase Invoice Delete/Edit, Returns Ledger/Edit and Owner DB Clear
+
+1) Extract the ZIP.
+2) Upload CONTENTS of the ShopDesk folder to a NEW branch of your existing repository.
+3) Commit .github/workflows/windows-build.yml too.
+4) Actions > Build ShopDesk Windows EXE (v0.9.11) > Run workflow.
+5) Green analyze + regressions + Windows bundle required before installing on a working customer machine.
+6) Keep your old executable, source and database backup.
+
+Settings > Clear Shop Database is destructive. Admin login + owner PIN required.
+An automatic backup is created first. Login/license/trial are NOT reset.
+
+See UPGRADE_V0_9_11.md for detailed migration, accounting behavior and test cases.

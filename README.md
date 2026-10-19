@@ -46,3 +46,14 @@ See `FIX_NOTES_V0_9_8.md`. Updates the stale payroll widget test to target stabl
 - Dashboard includes a live **Customer Credit Due** card, scoped to the selected date range; clear date filter restores rolling 30-day view.
 - SQLite migration retains old data and adds an optional `payment_account_id` field to party_ledger. Existing 0.9.x invoices are not rewritten.
 - Build/test checks now include `test/ledger_payment_credit_test.dart`; Windows SDK build still pending. See `UPGRADE_V0_9_10.md` for details.
+
+
+## v0.9.12 — Keyboard shortcuts
+
+Press **F1** (or the keyboard icon in the top bar) to see all available
+shortcuts. F2 opens full-screen POS; F3 opens Sales Invoices; F4 opens
+Purchase Invoices; F5 refreshes; Ctrl+K searches modules. In the POS,
+Ctrl+F focuses product search, Enter chooses the first match, Ctrl+S
+saves through existing permission/validation checks and F6 toggles
+payment details. Leaving a POS with unsaved cart items asks for confirmation.
+See `KEYBOARD_SHORTCUTS_V0_9_12.md` for the complete map.

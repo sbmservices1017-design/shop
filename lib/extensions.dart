@@ -1,3 +1,4 @@
+import 'dart:convert';
 // ShopDesk transaction extensions. All stock, party ledger and account postings
 // are committed together in one SQLite transaction. Nothing is hard-deleted.
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -12,6 +13,7 @@ class ReturnItem {
 Future<void> ensureExtendedSchema(Store s) async {
   for (final sql in <String>[
     '''CREATE TABLE IF NOT EXISTS document_returns(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES documents(id),date TEXT NOT NULL,amount INTEGER NOT NULL,refunded INTEGER NOT NULL,account_id INTEGER NOT NULL REFERENCES accounts(id),reason TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'POSTED' CHECK(status IN ('POSTED','VOID')))''',
+    '''CREATE TABLE IF NOT EXISTS return_revisions(id INTEGER PRIMARY KEY,return_id INTEGER NOT NULL REFERENCES document_returns(id),changed_at TEXT NOT NULL,old_data TEXT NOT NULL,old_lines TEXT NOT NULL)''',
     '''CREATE TABLE IF NOT EXISTS return_lines(id INTEGER PRIMARY KEY,return_id INTEGER NOT NULL REFERENCES document_returns(id),source_line_id INTEGER NOT NULL REFERENCES document_lines(id),variant_id INTEGER NOT NULL REFERENCES variants(id),qty REAL NOT NULL CHECK(qty>0),amount INTEGER NOT NULL)''',
     '''CREATE TABLE IF NOT EXISTS reversed_transactions(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,source_id INTEGER NOT NULL,date TEXT NOT NULL,note TEXT NOT NULL DEFAULT '',UNIQUE(kind,source_id))''',
     '''CREATE INDEX IF NOT EXISTS ix_returns_invoice ON document_returns(document_id,status)''',
@@ -53,17 +55,21 @@ extension ShopDeskExtendedOperations on Store {
 
   /// Return against a specific invoice LINE, not just SKU; prevents refunding
   /// against a different rate or returning more than originally sold/bought.
-  Future<int> postReturn(int documentId,List<ReturnItem> lines,double refund,int account,String reason) async {
+  Future<int> postReturn(int documentId,List<ReturnItem> lines,double refund,int account,String reason,{String? returnDate}) async {
     if(lines.isEmpty)throw const FormatException('Select at least one returned item');
+    if(!refund.isFinite || refund<0)throw const FormatException('Invalid refund amount');
+    return db.transaction((t)=>_postReturnTxn(t,documentId,lines,refund,account,reason,returnDate:returnDate));
+  }
+
+  Future<int> _postReturnTxn(Transaction t,int documentId,List<ReturnItem> lines,double refund,int account,String reason,{int? existingId,String? returnDate}) async {
     final paid=pennies(refund);
-    if(!refund.isFinite || paid<0)throw const FormatException('Invalid refund amount');
-    return db.transaction((t)async{
+    if(lines.isEmpty)throw const FormatException('Select at least one returned item');
       final ds=await t.rawQuery("SELECT * FROM documents WHERE id=? AND status='POSTED'",[documentId]);
       if(ds.isEmpty)throw const FormatException('Original invoice must be posted');
       final doc=ds.first;final kind=doc['kind'] as String;final party=doc['party_id'] as int?;
-      final matching=await t.rawQuery('SELECT id FROM accounts WHERE id=? AND code IN (\'1000\',\'1010\')',[account]);
-      if(matching.isEmpty)throw const FormatException('Choose cash or bank account');
-      final sourceRows=await t.rawQuery('SELECT * FROM document_lines WHERE document_id=?',[documentId]);
+      final matching=await t.rawQuery('SELECT a.id FROM accounts a JOIN payment_accounts pa ON pa.account_id=a.id WHERE a.id=? AND a.active=1',[account]);
+      if(matching.isEmpty)throw const FormatException('Choose an active cash, bank or wallet account');
+      final sourceRows=await t.rawQuery('SELECT * FROM document_lines WHERE document_id=? AND is_current=1',[documentId]);
       final source={for(final x in sourceRows)x['id'] as int:x};
       final selected=<int,double>{};
       for(final line in lines){
@@ -81,8 +87,12 @@ extension ShopDeskExtendedOperations on Store {
       }
       if(paid>total)throw const FormatException('Refund cannot exceed value of returned items');
       if(party==null && paid!=total)throw const FormatException('Walk-in customer refund must equal the return value');
-      final date=nowDate();
-      final id=await t.rawInsert('INSERT INTO document_returns(document_id,date,amount,refunded,account_id,reason) VALUES(?,?,?,?,?,?)',[documentId,date,total,paid,account,reason]);
+      final date=returnDate??nowDate();
+      if(!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)||DateTime.tryParse(date)==null) throw const FormatException('Enter a valid return date YYYY-MM-DD');
+      final id=existingId??await t.rawInsert('INSERT INTO document_returns(document_id,date,amount,refunded,account_id,reason) VALUES(?,?,?,?,?,?)',[documentId,date,total,paid,account,reason]);
+      if(existingId!=null){
+        await t.rawUpdate("UPDATE document_returns SET date=?,amount=?,refunded=?,account_id=?,reason=?,status='POSTED' WHERE id=?",[date,total,paid,account,reason,id]);
+      }
       for(final e in selected.entries){
         final l=source[e.key]!;
         await t.rawInsert('INSERT INTO return_lines(return_id,source_line_id,variant_id,qty,amount) VALUES(?,?,?,?,?)',
@@ -113,10 +123,32 @@ extension ShopDeskExtendedOperations on Store {
       await addJournal(t,'${kind}_return',id,date,'Return of ${doc['invoice']}: $reason',journal);
       await audit(t,'RETURN',kind,id,'Original invoice ${doc['invoice']}');
       return id;
-    });
   }
 
-  Future<void> voidReturn(int returnId) async => db.transaction((t)async{
+  /// Edit the same return ID. Previous movements and ledgers are reversed,
+  /// previous values archived, and new values posted in one SQLite transaction.
+  Future<int> reviseReturn(int returnId,List<ReturnItem> lines,double refund,int account,String reason,{String? returnDate}) async => db.transaction((t)async {
+    final old=await t.rawQuery("SELECT * FROM document_returns WHERE id=? AND status='POSTED'",[returnId]);
+    if(old.isEmpty)throw const FormatException('Return already cancelled or not found');
+    final oldLines=await t.rawQuery('SELECT * FROM return_lines WHERE return_id=?',[returnId]);
+    await t.rawInsert('INSERT INTO return_revisions(return_id,changed_at,old_data,old_lines) VALUES(?,?,?,?)',
+      [returnId,nowStamp(),jsonEncode(old.first),jsonEncode(oldLines)]);
+    await _voidReturnTxn(t,returnId);
+    final kind=(await t.rawQuery('SELECT kind FROM documents WHERE id=?',[old.first['document_id']])).first['kind'] as String;
+    for(final source in ['${kind}_return','${kind}_return_refund']){
+      await t.rawUpdate('UPDATE party_ledger SET source_type=? WHERE source_type=? AND source_id=?',
+          ['superseded_$source',source,returnId]);
+    }
+    await t.rawUpdate('UPDATE journal SET source_type=? WHERE source_type=? AND source_id=?',
+        ['superseded_${kind}_return','${kind}_return',returnId]);
+    await t.rawDelete('DELETE FROM return_lines WHERE return_id=?',[returnId]);
+    await _postReturnTxn(t,old.first['document_id'] as int,lines,refund,account,reason,existingId:returnId,returnDate:returnDate??'${old.first['date']}');
+    await audit(t,'REVISE','return',returnId,'Return corrected in place');
+    return returnId;
+  });
+
+  Future<void> voidReturn(int returnId) async => db.transaction((t)=>_voidReturnTxn(t,returnId));
+  Future<void> _voidReturnTxn(Transaction t,int returnId) async {
     final found=await t.rawQuery("SELECT r.*,d.kind,d.party_id FROM document_returns r JOIN documents d ON d.id=r.document_id WHERE r.id=? AND r.status='POSTED'",[returnId]);
     if(found.isEmpty)throw const FormatException('Posted return not found');
     final ret=found.first;final kind=ret['kind'] as String;final date=nowDate();
@@ -134,7 +166,7 @@ extension ShopDeskExtendedOperations on Store {
     }
     await _reverseJournal(t,'${kind}_return',returnId,'Return voided');
     await audit(t,'VOID','return',returnId);
-  });
+  }
 
   Future<void> voidReceipt(int receiptId) async => db.transaction((t)async{
     final row=await t.rawQuery('SELECT * FROM receipts WHERE id=?',[receiptId]);

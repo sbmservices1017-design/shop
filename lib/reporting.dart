@@ -64,7 +64,7 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
       if(f.search.isNotEmpty){where.add('(d.invoice LIKE ? OR p.name LIKE ? OR v.sku LIKE ? OR pa.name LIKE ?)');
         args.addAll(List.filled(4,'%${f.search}%'));}
       sql='''SELECT d.date AS Date,d.invoice AS Invoice,coalesce(pa.name,'Walk-in') AS Party,p.name AS Product,v.sku AS SKU,l.qty AS Qty,coalesce(lu.unit,v.unit) AS Unit,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount,d.paid/100.0 AS 'Invoice Paid',d.total/100.0 AS 'Invoice Total'
-        FROM documents d JOIN document_lines l ON l.document_id=d.id JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id JOIN categories c ON c.id=p.category_id
+        FROM documents d JOIN document_lines l ON l.document_id=d.id AND l.is_current=1 JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id JOIN categories c ON c.id=p.category_id
         LEFT JOIN parties pa ON pa.id=d.party_id LEFT JOIN document_line_units lu ON lu.line_id=l.id WHERE ${where.join(' AND ')} ORDER BY d.date DESC,d.id DESC''';
       headers=['Date','Invoice','Party','Product','SKU','Qty','Unit','Rate','Amount','Invoice Paid','Invoice Total'];
       break;
@@ -193,7 +193,7 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
     case 'Sales Returns':
     case 'Purchase Returns':
       final sale=f.type=='Sales Returns';
-      where.add('d.kind=?');args.add(sale?'sale':'purchase');where.add(dateFilter('r.date'));
+      where.add("r.status='POSTED'");where.add('d.kind=?');args.add(sale?'sale':'purchase');where.add(dateFilter('r.date'));
       if(f.party!=null){where.add('d.party_id=?');args.add(f.party);}
       if(f.category!=null){where.add('c.id=?');args.add(f.category);}
       if(f.product!=null){where.add('p.id=?');args.add(f.product);}
