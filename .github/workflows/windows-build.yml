@@ -1,4 +1,4 @@
-name: Build ShopDesk Windows EXE (v0.9.12)
+name: Build ShopDesk Windows EXE (v0.9.13)
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           if (-not (Test-Path 'lib/commercial_core.dart')) { throw 'Commercial upgrade source missing' }
           if (-not (Test-Path 'lib/license_public.dart')) { throw 'License public key missing' }
           if (Test-Path 'shopdesk_license_private.pem') { throw 'PRIVATE SIGNING KEY MUST NEVER BE COMMITTED TO GITHUB' }
-          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('SHOPDESK_SOURCE_0_9_12'))) { throw 'ShopDesk v0.9.11 source version missing' }
+          if (-not ((Get-Content 'SOURCE_VERSION.txt' -Raw).Contains('SHOPDESK_SOURCE_0_9_13'))) { throw 'ShopDesk v0.9.13 source version missing' }
           if (-not $source.Contains('paymentAccountOptions')) { throw 'Payment account holder/ID helper missing' }
           if (-not $source.Contains('postDocumentSplit')) { throw 'Split tender accounting not uploaded' }
           if (-not $source.Contains('recordInvoiceInstallment')) { throw 'Invoice installment handler missing' }
@@ -76,7 +76,7 @@ jobs:
           if (-not (Test-Path 'lib/shop_shortcuts.dart')) { throw 'Keyboard shortcut definitions missing' }
           if (-not $ui.Contains('withHotkeys')) { throw 'Keyboard shortcuts not wired into Shell' }
           if (-not ((Get-Content 'lib/modern_pos.dart' -Raw).Contains('focusProductSearch'))) { throw 'POS keyboard shortcuts missing' }
-          Write-Host 'ShopDesk v0.9.12 Keyboard Shortcuts source verified'  
+          Write-Host 'ShopDesk v0.9.13 invoice correction source verified'  
 
       - name: Generate native Windows files
         run: flutter create --platforms=windows --project-name shopdesk_flutter --no-pub .

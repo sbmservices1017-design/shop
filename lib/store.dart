@@ -666,9 +666,31 @@ class Store {
     final installments=await t.rawQuery('SELECT receipt_id,amount FROM receipt_allocations WHERE document_id=?',[oldId]);
     final originalInitial=splitRows.fold<int>(0,(n,r)=>n+(r['amount'] as int));
     final allocated=installments.fold<int>(0,(n,r)=>n+(r['amount'] as int));
-    if(pennies(paid)!=originalInitial+allocated)throw const FormatException(
-      'Correct the invoice items and prices here. To change payment amounts, use installment/payment history instead.');
-    final preservedPayments=splitRows.map((r)=>PaymentPart(r['account_id'] as int,(r['amount'] as int)/100)).toList();
+    if(!paid.isFinite || pennies(paid)<0){
+      throw const FormatException('Enter a valid, non-negative amount paid');
+    }
+    // A single-tender invoice without later receipts can correct its original
+    // payment as well as its items. The old bank/cash posting is reversed by
+    // _voidDocumentTxn before _postDocumentTxn writes the corrected posting.
+    // Multiple tender rows or allocated installments represent separately
+    // recorded real payments: do not silently change them via this field.
+    final canCorrectInitialPayment=splitRows.length<=1 && installments.isEmpty;
+    final List<PaymentPart> preservedPayments;
+    final int correctedInitial;
+    if(canCorrectInitialPayment){
+      correctedInitial=pennies(paid);
+      preservedPayments=correctedInitial>0
+          ? <PaymentPart>[PaymentPart(paymentAccount,correctedInitial/100)]
+          : <PaymentPart>[];
+    }else{
+      if(pennies(paid)!=originalInitial+allocated){
+        throw const FormatException(
+          'The invoice has split payments or installments. Keep the recorded paid amount unchanged; correct payments through their history.');
+      }
+      correctedInitial=originalInitial;
+      preservedPayments=splitRows.map((r)=>
+          PaymentPart(r['account_id'] as int,(r['amount'] as int)/100)).toList();
+    }
     final oldLines=await t.rawQuery('SELECT l.variant_id,l.qty,l.rate,l.amount,coalesce(u.unit,v.unit) AS unit,coalesce(u.factor,1) AS factor FROM document_lines l JOIN variants v ON v.id=l.variant_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? AND l.is_current=1 ORDER BY l.id',[oldId]);
     // Active returns depend on currently posted invoice lines; cancel them first.
     final activeReturns=await t.rawQuery("SELECT 1 FROM document_returns WHERE document_id=? AND status='POSTED' LIMIT 1",[oldId]);
@@ -689,10 +711,10 @@ class Store {
     }
     await t.rawUpdate('UPDATE journal SET source_type=? WHERE source_id=? AND source_type=?',
       ['superseded_$kind',oldId,kind]);
-    final updated=await _postDocumentTxn(t,kind,partyId,date,items,originalInitial/100,paymentAccount,notes,
+    final updated=await _postDocumentTxn(t,kind,partyId,date,items,correctedInitial/100,paymentAccount,notes,
       existingId:oldId,existingInvoice:original['invoice'] as String,payments:preservedPayments);
     final updatedTotal=(await t.rawQuery('SELECT total FROM documents WHERE id=?',[oldId])).first['total'] as int;
-    var available=(updatedTotal-originalInitial).clamp(0,updatedTotal);
+    var available=(updatedTotal-correctedInitial).clamp(0,updatedTotal);
     for(final r in installments){
       final portion=(r['amount'] as int)<available?(r['amount'] as int):available;
       if(portion>0){

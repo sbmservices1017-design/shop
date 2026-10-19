@@ -37,8 +37,26 @@ void main(){
     await expectLater(store.recordInvoiceInstallment(id,1,cash,'Overpay'),throwsFormatException);
     await store.voidReceipt(receipt);
     expect((await store.read('SELECT paid FROM documents WHERE id=?',[id])).first['paid'],1700000);
+    // After the installment is reversed, changing the total tender through
+    // the legacy single-payment field must NOT overwrite Cash/Bank/Wallet.
     await expectLater(store.reviseDocument(id,'sale',customer,'2026-10-14',[
-      ItemLine(variant,1,20000)],17000,cash),throwsFormatException);
+      ItemLine(variant,1,20000)],16000,cash),throwsFormatException);
+    expect((await store.read('SELECT paid FROM documents WHERE id=?',[id])).first['paid'],1700000);
+    // Updating the invoice items with the unchanged recorded paid total IS
+    // supported and must preserve all three original payment methods.
+    final revised=await store.reviseDocument(id,'sale',customer,'2026-10-14',[
+      ItemLine(variant,1,20000)],17000,cash);
+    expect(revised,id);
+    final afterParts=await store.read('''SELECT account_id,amount FROM document_payment_parts
+      WHERE document_id=? AND active=1 ORDER BY id''',[id]);
+    expect(afterParts.map((p)=>p['account_id']).toList(),[cash,bank,wallet]);
+    expect(afterParts.map((p)=>p['amount']).toList(),[800000,700000,200000]);
+    final revisedDoc=(await store.read('SELECT total,paid,status FROM documents WHERE id=?',[id])).first;
+    expect(revisedDoc['total'],2000000);
+    expect(revisedDoc['paid'],1700000);
+    expect(revisedDoc['status'],'POSTED');
+    expect((await store.read('SELECT COUNT(*) AS n FROM document_revisions WHERE document_id=?',[id])).first['n'],1);
+    expect(numVal((await store.stock()).firstWhere((r)=>r['id']==variant)['qty']),-1);
     await store.voidDocument(id);
     expect((await store.read('SELECT COUNT(*) AS n FROM document_payment_parts WHERE document_id=? AND active=1',[id])).first['n'],0);
     expect(numVal((await store.stock()).firstWhere((r)=>r['id']==variant)['qty']),0);

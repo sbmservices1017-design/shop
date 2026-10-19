@@ -201,6 +201,15 @@ void main(){
     expect((await s.read('SELECT count(*) n FROM documents WHERE id=?',[original])).first['n'],1);
     expect((await s.read('SELECT status FROM documents WHERE id=?',[revised])).first['status'],'POSTED');
     expect(numVal((await s.stock()).firstWhere((x)=>x['id']==vid)['qty']),-3);
+    // This is a single-payment invoice: a documented correction from Rs.
+    // 1,000 to Rs. 500 must leave one active Cash tender and a Rs. 2,500 due.
+    final saved=(await s.read('SELECT total,paid FROM documents WHERE id=?',[original])).first;
+    expect(saved['total'],300000);
+    expect(saved['paid'],50000);
+    final savedPayments=await s.read('SELECT amount,account_id FROM document_payment_parts WHERE document_id=? AND active=1',[original]);
+    expect(savedPayments.length,1);
+    expect(savedPayments.first['amount'],50000);
+    expect(savedPayments.first['account_id'],cash);
     final balance=(await s.read('SELECT sum(debit-credit) AS bal FROM party_ledger WHERE party_id=?',[client])).first['bal'];
     expect(balance,250000);
     final report=await buildReport(s,ReportFilter(type:'Sales',start:'2020-01-01',end:'2100-01-01',variant:vid,paymentStatus:'partial'));
@@ -208,6 +217,7 @@ void main(){
     expect(await s.verifyDatabase(),isEmpty);
     final correctedAgain=await s.reviseDocument(original,'sale',client,nowDate(),[ItemLine(vid,4,1000)],1000,cash);
     expect(correctedAgain,original);
+    expect((await s.read('SELECT paid FROM documents WHERE id=?',[original])).first['paid'],100000);
     expect((await s.read('SELECT count(*) AS n FROM document_revisions WHERE document_id=?',[original])).first['n'],2);
     expect(numVal((await s.stock()).firstWhere((x)=>x['id']==vid)['qty']),-4);
     await s.voidDocument(original);

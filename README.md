@@ -57,3 +57,8 @@ Ctrl+F focuses product search, Enter chooses the first match, Ctrl+S
 saves through existing permission/validation checks and F6 toggles
 payment details. Leaving a POS with unsaved cart items asks for confirmation.
 See `KEYBOARD_SHORTCUTS_V0_9_12.md` for the complete map.
+
+
+## v0.9.13 — Invoice Payment Correction & Regression Fix
+
+See `FIX_NOTES_V0_9_13.md`. Single-tender invoice payment corrections are audited; multiple tenders and allocated installments are preserved while items/rates can be revised with unchanged recorded payment total.
