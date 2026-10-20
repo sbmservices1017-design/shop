@@ -1,3 +1,7 @@
+# ShopDesk Pro v0.9.14 — POS-Style Sale/Purchase Returns
+
+See [UPGRADE_V0_9_14_RETURN_POS_AND_INVOICE_QTY.md](UPGRADE_V0_9_14_RETURN_POS_AND_INVOICE_QTY.md). This update adds full-invoice and selected-item returns, invoice-line variation and unit visibility, and original/returned/remaining quantities on invoices and reports. Flutter/Windows build **not yet verified**; use GitHub Actions.
+
 **Latest UI update:** See [UPGRADE_V0_9_9.md](UPGRADE_V0_9_9.md) for full-screen POS and safe Delete controls.
 
 # ShopDesk Pro v0.9.6 — Consolidated Client Changes

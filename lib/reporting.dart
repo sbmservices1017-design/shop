@@ -63,10 +63,33 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
       if(f.maxAmount!=null){where.add('l.amount<=?');args.add(pennies(f.maxAmount!));}
       if(f.search.isNotEmpty){where.add('(d.invoice LIKE ? OR p.name LIKE ? OR v.sku LIKE ? OR pa.name LIKE ?)');
         args.addAll(List.filled(4,'%${f.search}%'));}
-      sql='''SELECT d.date AS Date,d.invoice AS Invoice,coalesce(pa.name,'Walk-in') AS Party,p.name AS Product,v.sku AS SKU,l.qty AS Qty,coalesce(lu.unit,v.unit) AS Unit,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount,d.paid/100.0 AS 'Invoice Paid',d.total/100.0 AS 'Invoice Total'
-        FROM documents d JOIN document_lines l ON l.document_id=d.id AND l.is_current=1 JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id JOIN categories c ON c.id=p.category_id
-        LEFT JOIN parties pa ON pa.id=d.party_id LEFT JOIN document_line_units lu ON lu.line_id=l.id WHERE ${where.join(' AND ')} ORDER BY d.date DESC,d.id DESC''';
-      headers=['Date','Invoice','Party','Product','SKU','Qty','Unit','Rate','Amount','Invoice Paid','Invoice Total'];
+      sql='''SELECT d.date AS Date,d.invoice AS Invoice,coalesce(pa.name,'Walk-in') AS Party,
+        p.name AS Product,v.sku AS SKU,
+        coalesce((SELECT group_concat(a.name || ': ' || vv.value, ', ')
+          FROM variant_values vv JOIN attributes a ON a.id=vv.attribute_id WHERE vv.variant_id=v.id),'') AS Variation,
+        l.qty AS Original_Qty,
+        coalesce((SELECT sum(rl.qty) FROM return_lines rl
+          JOIN document_returns dr ON dr.id=rl.return_id
+          WHERE rl.source_line_id=l.id AND dr.status='POSTED'),0) AS Returned_Qty,
+        l.qty-coalesce((SELECT sum(rl.qty) FROM return_lines rl
+          JOIN document_returns dr ON dr.id=rl.return_id
+          WHERE rl.source_line_id=l.id AND dr.status='POSTED'),0) AS Remaining_Qty,
+        coalesce(lu.unit,v.unit) AS Unit,l.rate/100.0 AS Rate,
+        l.amount/100.0 AS Original_Amount,
+        coalesce((SELECT sum(rl.amount) FROM return_lines rl
+          JOIN document_returns dr ON dr.id=rl.return_id
+          WHERE rl.source_line_id=l.id AND dr.status='POSTED'),0)/100.0 AS Returned_Amount,
+        (l.amount-coalesce((SELECT sum(rl.amount) FROM return_lines rl
+          JOIN document_returns dr ON dr.id=rl.return_id
+          WHERE rl.source_line_id=l.id AND dr.status='POSTED'),0))/100.0 AS Net_Goods_Amount,
+        d.paid/100.0 AS 'Invoice Paid',d.total/100.0 AS 'Original Invoice Total'
+        FROM documents d JOIN document_lines l ON l.document_id=d.id AND l.is_current=1
+        JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id
+        JOIN categories c ON c.id=p.category_id
+        LEFT JOIN parties pa ON pa.id=d.party_id LEFT JOIN document_line_units lu ON lu.line_id=l.id
+        WHERE ${where.join(' AND ')} ORDER BY d.date DESC,d.id DESC''';
+      headers=['Date','Invoice','Party','Product','SKU','Variation','Original_Qty','Returned_Qty','Remaining_Qty',
+        'Unit','Rate','Original_Amount','Returned_Amount','Net_Goods_Amount','Invoice Paid','Original Invoice Total'];
       break;
     case 'Products':
     case 'Stock':
@@ -200,14 +223,18 @@ Future<ReportResult> buildReport(Store s,ReportFilter f) async {
       if(f.variant!=null){where.add('v.id=?');args.add(f.variant);}
       if(f.search.isNotEmpty){where.add(term('d.invoice'));}
       sql='''SELECT r.date AS Date,d.invoice AS Original_Invoice,coalesce(pa.name,'Walk-in') AS Party,
-        p.name AS Product,v.sku AS SKU,rl.qty AS Qty,v.unit AS Unit,rl.amount/100.0 AS Return_Amount,
+        p.name AS Product,v.sku AS SKU,
+        coalesce((SELECT group_concat(a.name || ': ' || vv.value, ', ') FROM variant_values vv
+          JOIN attributes a ON a.id=vv.attribute_id WHERE vv.variant_id=v.id),'') AS Variation,
+        rl.qty AS Qty,coalesce(lu.unit,v.unit) AS Unit,rl.amount/100.0 AS Return_Amount,
         r.refunded/100.0 AS Cash_Refund,r.reason AS Reason,r.status AS Status
         FROM return_lines rl JOIN document_returns r ON r.id=rl.return_id
         JOIN documents d ON d.id=r.document_id
         JOIN document_lines dl ON dl.id=rl.source_line_id
+        LEFT JOIN document_line_units lu ON lu.line_id=dl.id
         JOIN variants v ON v.id=rl.variant_id JOIN products p ON p.id=v.product_id JOIN categories c ON c.id=p.category_id
         LEFT JOIN parties pa ON pa.id=d.party_id WHERE ${where.join(' AND ')} ORDER BY r.date DESC,r.id DESC''';
-      headers=['Date','Original_Invoice','Party','Product','SKU','Qty','Unit','Return_Amount','Cash_Refund','Reason','Status'];break;
+      headers=['Date','Original_Invoice','Party','Product','SKU','Variation','Qty','Unit','Return_Amount','Cash_Refund','Reason','Status'];break;
     case 'Payments':
       where.add(dateFilter('r.date'));
       if(f.party!=null){where.add('r.party_id=?');args.add(f.party);}

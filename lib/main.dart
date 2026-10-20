@@ -16,6 +16,7 @@ import 'license_widgets.dart';
 import 'nexa_theme.dart';
 import 'brand_identity.dart';
 import 'shop_shortcuts.dart';
+import 'return_pos.dart';
 import 'package:flutter/services.dart';
 
 void main() {
@@ -464,7 +465,11 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
   final searchController=TextEditingController();
   late Future<List<Map<String,Object?>>> invoiceFuture;
   @override void initState(){super.initState();invoiceFuture=loadInvoices();}
-  Future<List<Map<String,Object?>>> loadInvoices()=>s.read('''SELECT d.*,coalesce(p.name,'Walk-in') AS party FROM documents d
+  Future<List<Map<String,Object?>>> loadInvoices()=>s.read('''SELECT d.*,coalesce(p.name,'Walk-in') AS party,
+    coalesce((SELECT sum(rl.amount) FROM return_lines rl
+      JOIN document_returns dr ON dr.id=rl.return_id
+      WHERE dr.document_id=d.id AND dr.status='POSTED'),0) AS returned_amount
+    FROM documents d
     LEFT JOIN parties p ON p.id=d.party_id WHERE d.kind=? AND d.status='POSTED' ORDER BY d.id DESC LIMIT 500''',[widget.kind]);
   @override void dispose(){searchController.dispose();super.dispose();}
 
@@ -497,8 +502,28 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
     }catch(e){if(mounted)await showError(context,e);}
   }
   Future<void> previewInvoice(Map<String,Object?> row)async{
-    try{final x=await s.read('''SELECT p.name AS Product,v.sku AS SKU,l.qty AS Qty,coalesce(u.unit,v.unit) AS Unit,l.rate/100.0 AS Rate,l.amount/100.0 AS Amount FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? AND l.is_current=1''',[row['id']]);
-      final rpt=ReportResult('Invoice ${row['invoice']}',const ['Product','SKU','Qty','Unit','Rate','Amount'],x.map((r)=>['${r['Product']}','${r['SKU']}','${r['Qty']}','${r['Unit']}','${r['Rate']}','${r['Amount']}']).toList());
+    try{final x=await s.read('''SELECT p.name AS Product,v.sku AS SKU,
+        coalesce((SELECT group_concat(a.name || ': ' || vv.value, ', ')
+          FROM variant_values vv JOIN attributes a ON a.id=vv.attribute_id
+          WHERE vv.variant_id=v.id),'') AS Variation,
+        l.qty AS original_qty,
+        coalesce((SELECT sum(rl.qty) FROM return_lines rl
+          JOIN document_returns dr ON dr.id=rl.return_id
+          WHERE rl.source_line_id=l.id AND dr.status='POSTED'),0) AS returned_qty,
+        l.qty-coalesce((SELECT sum(rl.qty) FROM return_lines rl
+          JOIN document_returns dr ON dr.id=rl.return_id
+          WHERE rl.source_line_id=l.id AND dr.status='POSTED'),0) AS net_qty,
+        coalesce(u.unit,v.unit) AS Unit,
+        l.rate/100.0 AS Rate,l.amount/100.0 AS Amount
+        FROM document_lines l JOIN variants v ON v.id=l.variant_id
+        JOIN products p ON p.id=v.product_id
+        LEFT JOIN document_line_units u ON u.line_id=l.id
+        WHERE l.document_id=? AND l.is_current=1 ORDER BY l.id''',[row['id']]);
+      final rpt=ReportResult('Invoice ${row['invoice']}',
+        const ['Product','Variation','SKU','Original Qty','Returned Qty','Remaining Qty','Unit','Rate','Original Amount'],
+        x.map((r)=>['${r['Product']}','${r['Variation']}','${r['SKU']}',
+          '${r['original_qty']}','${r['returned_qty']}','${r['net_qty']}',
+          '${r['Unit']}','${r['Rate']}','${r['Amount']}']).toList());
       final onBill=await s.read('''SELECT d.date AS date,a.name AS account,p.amount AS amount
         FROM document_payment_parts p JOIN documents d ON d.id=p.document_id
         JOIN accounts a ON a.id=p.account_id WHERE p.document_id=? AND p.active=1
@@ -509,7 +534,7 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
         WHERE ra.document_id=? ORDER BY r.date,r.id''',[row['id']]);
       final allPayments=[...onBill,...installments];
       if(!mounted)return;
-      await showDialog(context:context,builder:(ctx)=>AlertDialog(title:Text('${row['invoice']}  |  ${row['party']}'),content:SizedBox(width:640,child:Column(mainAxisSize:MainAxisSize.min,children:[listing(rpt.headings,rpt.rows.map((r)=>r.map((v)=>txt(v)).toList()).toList()),Text('Total: ${funds(row['total'])}     Paid: ${funds(row['paid'])}'),
+      await showDialog(context:context,builder:(ctx)=>AlertDialog(title:Text('${row['invoice']}  |  ${row['party']}'),content:SizedBox(width:1030,child:Column(mainAxisSize:MainAxisSize.min,children:[SingleChildScrollView(scrollDirection:Axis.horizontal,child:SizedBox(width:1120,child:listing(rpt.headings,rpt.rows.map((r)=>r.map((v)=>txt(v)).toList()).toList()))),Text('Original: ${funds(row['total'])}   Returns: ${funds(row['returned_amount'])}   Net goods: ${rs((numVal(row['total'])-numVal(row['returned_amount']))/100)}   Paid: ${funds(row['paid'])}'),
         if(allPayments.isNotEmpty)...[
           const SizedBox(height:12),const Text('Payments by method',style:TextStyle(fontWeight:FontWeight.w700)),
           SizedBox(height:160,child:SingleChildScrollView(child:listing(
@@ -536,10 +561,10 @@ class _DocumentScreenState extends State<DocumentScreen>{final s=Store.instance;
           OutlinedButton.icon(onPressed:(){searchController.clear();setState((){term='';paymentFilter='All';});},icon:const Icon(Icons.filter_alt_off),label:const Text('Clear Filters')),
           Text('${filtered.length} invoices',style:const TextStyle(fontWeight:FontWeight.w700,color:ink)),
         ])),
-        listing(['Date','Invoice Number','Customer / Supplier','Total','Paid','Balance','Payment Status','Invoice Status','Actions'],filtered.map((r){
+        listing(['Date','Invoice Number','Customer / Supplier','Original Value','Returned Value','Net Goods Value','Paid','Balance','Payment Status','Invoice Status','Actions'],filtered.map((r){
           final total=numVal(r['total']),paid=numVal(r['paid']);
           final paymentStatus=paid>=total?'Paid':paid>0?'Partially Paid':'Unpaid';
-          return [txt(r['date']),txt(r['invoice']),txt(r['party']),txt(funds(r['total'])),txt(funds(r['paid'])),txt(funds(total-paid)),
+          return [txt(r['date']),txt(r['invoice']),txt(r['party']),txt(funds(r['total'])),txt(funds(r['returned_amount'])),txt(rs((total-numVal(r['returned_amount']))/100)),txt(funds(r['paid'])),txt(funds(total-paid)),
             Text(paymentStatus,style:TextStyle(color:paymentStatus=='Paid'?const Color(0xFF16865B):const Color(0xFFBA651A),fontWeight:FontWeight.w800)),
             txt(r['status']),buttons([
               small('View / Print A4',()=>previewInvoice(r),icon:Icons.print_outlined),
@@ -565,48 +590,9 @@ class _ReturnScreenState extends State<ReturnScreen>{
     catch(e){if(mounted)await showError(context,e);}
   }
   Future<void> editOrCreate([Map<String,Object?>? existing]) async {
-    final editing=existing!=null;
-    final docs=await s.read("SELECT d.id,d.invoice,d.kind,coalesce(p.name,'Walk-in') AS party FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE d.status='POSTED' AND d.kind=? ORDER BY d.id DESC LIMIT 300",[widget.kind]);
-    if(docs.isEmpty)throw const FormatException('Create a sale or purchase first');
-    if(!mounted)return;
-    int? documentId=existing?['document_id'] as int?;
-    if(documentId==null){
-      final choice=await ask(context,'Select original sale / purchase',[
-        FieldSpec('doc','Invoice',choices:{for(final d in docs)d['id'] as int:'${d['invoice']} • ${d['party']}'})
-      ]);
-      if(choice==null)return;
-      documentId=int.parse(choice['doc']!);
-    }
-    final lines=await s.read('''SELECT l.id,p.name AS product,v.sku,l.qty,l.rate,
-      coalesce(u.unit,v.unit) AS item_unit,
-      coalesce((SELECT sum(rl.qty) FROM return_lines rl JOIN document_returns dr ON dr.id=rl.return_id
-        WHERE rl.source_line_id=l.id AND dr.status='POSTED' AND (? IS NULL OR dr.id<>?)),0) AS previously_returned
-      FROM document_lines l JOIN variants v ON v.id=l.variant_id JOIN products p ON p.id=v.product_id
-      LEFT JOIN document_line_units u ON u.line_id=l.id WHERE l.document_id=? AND l.is_current=1 ORDER BY l.id''',
-      [existing?['id'],existing?['id'],documentId]);
-    final oldItems=editing?await s.read('SELECT source_line_id,qty FROM return_lines WHERE return_id=?',[existing!['id']]):<Map<String,Object?>>[];
-    final prefilled={for(final r in oldItems)r['source_line_id'] as int:numVal(r['qty'])};
-    final accounts=await accountChoices(s);
-    if(!mounted)return;
-    final specs=<FieldSpec>[
-      ...lines.map((l)=>FieldSpec('line_${l['id']}',
-        '${l['product']} / ${l['sku']} • available ${numVal(l['qty'])-numVal(l['previously_returned'])} ${l['item_unit']}',
-        initial:'${prefilled[l['id']]??0}',numeric:true)),
-      FieldSpec('date','Return date YYYY-MM-DD',initial:editing?'${existing!['date']}':nowDate()),
-      FieldSpec('refund','Refund now Rs. (0 if credit adjustment)',
-        initial:editing?rupees(existing!['refunded']).toStringAsFixed(2):'0',numeric:true),
-      FieldSpec('account','Cash / Bank / Wallet account',choices:accounts,initial:editing?'${existing!['account_id']}':'${accounts.keys.first}'),
-      FieldSpec('reason','Return reason',initial:editing?'${existing!['reason']}':'Customer / supplier return')
-    ];
-    final f=await ask(context,editing?'Edit Return #${existing!['id']}':'Return items by invoice line',specs);
-    if(f==null)return;
-    final items=<ReturnItem>[];
-    for(final l in lines){final amount=double.parse(f['line_${l['id']}']!);
-      if(amount>0)items.add(ReturnItem(l['id'] as int,amount));}
-    final refund=double.parse(f['refund']!);
-    final account=int.parse(f['account']!);
-    if(editing){await s.reviseReturn(existing!['id'] as int,items,refund,account,f['reason']!,returnDate:f['date']!);}
-    else{await s.postReturn(documentId!,items,refund,account,f['reason']!,returnDate:f['date']!);}
+    final saved=await showDialog<bool>(context:context,
+      builder:(ctx)=>ReturnPosDialog(kind:widget.kind,existing:existing));
+    if(saved==true && mounted){setState((){});widget.onChange();}
   }
   Future<void> viewReturnLedger(Map<String,Object?> record) async {
     final rows=await s.read('''SELECT l.date,l.source_type,l.debit,l.credit,l.note,
@@ -646,7 +632,17 @@ class _ReturnScreenState extends State<ReturnScreen>{
         TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close'))]));
   }
   @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(
-    future:s.read('''SELECT r.*,d.invoice,d.kind,coalesce(p.name,'Walk-in') AS party
+    future:s.read('''SELECT r.*,d.invoice,d.kind,coalesce(p.name,'Walk-in') AS party,
+      coalesce((SELECT group_concat(pi.name || ' [' || v.sku || ']' ||
+        CASE WHEN coalesce((SELECT group_concat(a.name || ': ' || vv.value, ', ')
+          FROM variant_values vv JOIN attributes a ON a.id=vv.attribute_id
+          WHERE vv.variant_id=v.id),'') <> ''
+        THEN ' ' || (SELECT group_concat(a.name || ': ' || vv.value, ', ')
+          FROM variant_values vv JOIN attributes a ON a.id=vv.attribute_id
+          WHERE vv.variant_id=v.id) ELSE '' END, '; ')
+        FROM return_lines rl JOIN variants v ON v.id=rl.variant_id
+        JOIN products pi ON pi.id=v.product_id
+        WHERE rl.return_id=r.id),'') AS return_variations
       FROM document_returns r JOIN documents d ON d.id=r.document_id
       LEFT JOIN parties p ON p.id=d.party_id
       WHERE d.kind=? AND r.status='POSTED' ORDER BY r.id DESC LIMIT 300''',[widget.kind]),
@@ -654,9 +650,9 @@ class _ReturnScreenState extends State<ReturnScreen>{
       return pageWrap([section(widget.kind=='sale'?'Sale Returns':'Purchase Returns',
         action:addButton('New return',()=>change(()=>editOrCreate()))),
         panel(const Text('Edit keeps the original return ID. Deleted returns disappear from this active list, while stock and accounting reversals remain auditable.',style:TextStyle(color:Colors.blueGrey))),
-        listing(['Date','Return #','Original invoice','Customer / Supplier','Return Value','Refund','Actions'],
+        listing(['Date','Return #','Original invoice','Customer / Supplier','Returned Variations','Return Value','Refund','Actions'],
           snap.data!.map((r)=>[
-            txt(r['date']),txt(r['id']),txt(r['invoice']),txt(r['party']),
+            txt(r['date']),txt(r['id']),txt(r['invoice']),txt(r['party']),txt(r['return_variations']),
             txt(funds(r['amount'])),txt(funds(r['refunded'])),buttons([
               small('Ledger',()=>viewReturnLedger(r),icon:Icons.menu_book_outlined),
               small('Edit return',()=>change(()=>editOrCreate(r)),icon:Icons.edit_outlined),
