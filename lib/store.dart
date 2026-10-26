@@ -29,7 +29,7 @@ const schema = <String>[
 '''CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, active INTEGER NOT NULL DEFAULT 1)''',
 '''CREATE TABLE IF NOT EXISTS attributes(id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL REFERENCES categories(id), name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'text', choices TEXT NOT NULL DEFAULT '', UNIQUE(category_id,name))''',
 '''CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL REFERENCES categories(id), name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1)''',
-'''CREATE TABLE IF NOT EXISTS variants(id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id), sku TEXT UNIQUE NOT NULL COLLATE NOCASE, unit TEXT NOT NULL DEFAULT 'pcs', active INTEGER NOT NULL DEFAULT 1)''',
+'''CREATE TABLE IF NOT EXISTS variants(id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id), sku TEXT UNIQUE NOT NULL COLLATE NOCASE, unit TEXT NOT NULL DEFAULT 'pcs', active INTEGER NOT NULL DEFAULT 1, purchase_price INTEGER NOT NULL DEFAULT 0, sale_price INTEGER NOT NULL DEFAULT 0)''',
 '''CREATE TABLE IF NOT EXISTS variant_values(variant_id INTEGER NOT NULL REFERENCES variants(id),attribute_id INTEGER NOT NULL REFERENCES attributes(id),value TEXT NOT NULL,PRIMARY KEY(variant_id,attribute_id))''',
 '''CREATE TABLE IF NOT EXISTS parties(id INTEGER PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('customer','supplier')),name TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',address TEXT NOT NULL DEFAULT '',active INTEGER NOT NULL DEFAULT 1)''',
 '''CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('sale','purchase')),invoice TEXT NOT NULL UNIQUE,party_id INTEGER REFERENCES parties(id),date TEXT NOT NULL,total INTEGER NOT NULL DEFAULT 0,paid INTEGER NOT NULL DEFAULT 0,notes TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'POSTED' CHECK(status IN ('POSTED','VOID')))''',
@@ -123,6 +123,14 @@ class Store {
     final ledgerColumns=await db.rawQuery('PRAGMA table_info(party_ledger)');
     if(!ledgerColumns.any((column)=>column['name']=='payment_account_id')){
       await db.execute('ALTER TABLE party_ledger ADD COLUMN payment_account_id INTEGER REFERENCES accounts(id)');
+    }
+    // Optional reference prices for Stock Edit. Stored in paisa per BASE stock unit.
+    // Existing sales/purchase prices and historic invoice totals never change.
+    final variantColumns=await db.rawQuery('PRAGMA table_info(variants)');
+    for(final column in ['purchase_price','sale_price']) {
+      if(!variantColumns.any((c)=>c['name']==column)) {
+        await db.execute('ALTER TABLE variants ADD COLUMN $column INTEGER NOT NULL DEFAULT 0');
+      }
     }
     // Existing Roll variants may have been purchase-only. Allow selling a full
     // Roll as well as Feet/Gazz without changing its stored conversion factor.
@@ -366,10 +374,10 @@ class Store {
     });
   }
 
-  Future<List<Map<String,Object?>>> stock() => read('''SELECT v.id, p.name AS product,c.name AS category,v.sku,v.unit,coalesce(sum(m.qty),0) AS qty,
+  Future<List<Map<String,Object?>>> stock() => read('''SELECT v.id, p.name AS product,c.name AS category,v.sku,v.unit,v.purchase_price,v.sale_price,coalesce(sum(m.qty),0) AS qty,
     CASE WHEN EXISTS(SELECT 1 FROM variant_units ts WHERE ts.variant_id=v.id AND ts.unit='table sheet' AND ts.factor=1)
       THEN 'Table Sheets' ELSE v.unit END AS display_unit,
-    p.id AS product_id,(SELECT group_concat(a.name||': '||vv.value,', ') FROM variant_values vv JOIN attributes a ON a.id=vv.attribute_id WHERE vv.variant_id=v.id) AS attrs,
+    p.id AS product_id,(SELECT vv.value FROM variant_values vv JOIN attributes a ON a.id=vv.attribute_id WHERE vv.variant_id=v.id AND lower(a.name)='size' LIMIT 1) AS size_label,(SELECT group_concat(a.name||': '||vv.value,', ') FROM variant_values vv JOIN attributes a ON a.id=vv.attribute_id WHERE vv.variant_id=v.id) AS attrs,
     CASE WHEN EXISTS(SELECT 1 FROM variant_units ts WHERE ts.variant_id=v.id AND ts.unit='table sheet' AND ts.factor=1)
       THEN '1 Roll = '||(SELECT CAST(ru.factor AS INTEGER) FROM variant_units ru WHERE ru.variant_id=v.id AND ru.unit='roll')||' Table Sheets'
       ELSE (SELECT u.unit||' of '||CAST(u.factor AS TEXT)||' '||v.unit FROM variant_units u WHERE u.variant_id=v.id AND u.unit IN ('set','packet','roll') LIMIT 1) END AS package
@@ -464,6 +472,67 @@ class Store {
       await audit(t,'EDIT','payment_account',accountId,'Payment account name / holder changed');
     });
   }
+  /// Update stock reference prices and, optionally, correct the physical balance.
+  /// A quantity correction is posted as an auditable IN/OUT movement, never by
+  /// overwriting the movement ledger. Prices are only hints for later billing.
+  Future<void> editStockDetails(int variant,{
+    required double purchasePrice,
+    required double salePrice,
+    required double targetStock,
+    required String reason,
+  }) async {
+    if(!purchasePrice.isFinite || !salePrice.isFinite ||
+       purchasePrice<0 || salePrice<0 ||
+       !targetStock.isFinite || targetStock.abs()>100000000 ||
+       (targetStock*1000-(targetStock*1000).round()).abs()>0.00001) {
+      throw const FormatException('Enter valid stock quantity and non-negative prices');
+    }
+    await db.transaction((t) async {
+      final existing=await t.rawQuery('SELECT id FROM variants WHERE id=? AND active=1',[variant]);
+      if(existing.isEmpty)throw const FormatException('Variation not found');
+      final current=await t.rawQuery('SELECT coalesce(sum(qty),0) AS qty FROM stock_movements WHERE variant_id=?',[variant]);
+      final before=numVal(current.first['qty']);
+      final difference=targetStock-before;
+      if(difference.abs()>0.0000001 && reason.trim().isEmpty) {
+        throw const FormatException('Reason is required when correcting stock');
+      }
+      if((difference*1000-(difference*1000).round()).abs()>0.00001) {
+        throw const FormatException('Stock correction allows up to 3 decimals');
+      }
+      await t.rawUpdate('UPDATE variants SET purchase_price=?,sale_price=? WHERE id=?',
+        [pennies(purchasePrice),pennies(salePrice),variant]);
+      if(difference.abs()>0.0000001) {
+        final id=await t.rawInsert('INSERT INTO stock_movements(variant_id,qty,source_type,source_id,date,note) VALUES(?,?,?,?,?,?)',
+          [variant,difference,'ADJUST',0,nowDate(),reason.trim()]);
+        await t.rawUpdate('UPDATE stock_movements SET source_id=? WHERE id=?',[id,id]);
+      }
+      await audit(t,'EDIT','stock',variant,'Cost: $purchasePrice; Price: $salePrice; stock $before -> $targetStock. ${reason.trim()}');
+    });
+  }
+
+  /// Chronological stock movement history: In, Out and cumulative balance.
+  /// Includes reversals, sales, purchases, returns and manual adjustments.
+  Future<List<Map<String,Object?>>> stockLedger(int variantId) async {
+    final rows=await read("""SELECT m.id,m.date,m.source_type,m.source_id,m.qty,m.note,
+      coalesce(d.invoice,'') AS invoice FROM stock_movements m
+      LEFT JOIN documents d ON d.id=m.source_id AND m.source_type IN
+        ('sale','purchase','void_sale','void_purchase')
+      WHERE m.variant_id=? ORDER BY m.date ASC,m.id ASC""",[variantId]);
+    double balance=0;
+    final ledger=<Map<String,Object?>>[];
+    for(final row in rows){
+      final delta=numVal(row['qty']);
+      balance+=delta;
+      ledger.add({
+        ...row,
+        'in_qty':delta>0?delta:0.0,
+        'out_qty':delta<0?-delta:0.0,
+        'balance':balance,
+      });
+    }
+    return ledger;
+  }
+
   Future<void> adjustStock(int variant,double diff,String reason) async {
     if(!diff.isFinite||diff==0||(diff*1000-(diff*1000).round()).abs()>0.00001) throw const FormatException('Adjustment must be nonzero with max 3 decimals');
     await db.transaction((t) async {

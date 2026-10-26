@@ -366,6 +366,17 @@ class Dashboard extends StatelessWidget {
   });
 }
 
+String _stockTypeLabel(String kind)=>switch(kind){
+  'OPENING'=>'Opening Stock',
+  'sale'=>'Sale', 'purchase'=>'Purchase',
+  'sale_return'=>'Sale Return', 'purchase_return'=>'Purchase Return',
+  'ADJUST'=>'Stock Adjustment',
+  'void_sale'=>'Sale Cancelled', 'void_purchase'=>'Purchase Cancelled',
+  'void_sale_return'=>'Sale Return Cancelled',
+  'void_purchase_return'=>'Purchase Return Cancelled',
+  _=>kind.replaceAll('_',' '),
+};
+
 class StockScreen extends StatefulWidget {
   final VoidCallback onChange;
   const StockScreen({super.key,required this.onChange});
@@ -373,27 +384,102 @@ class StockScreen extends StatefulWidget {
 }
 class _StockScreenState extends State<StockScreen> {
   final s=Store.instance;
+  late Future<List<Map<String,Object?>>> _stockFuture;
+  String search='';
+  String? categoryFilter;
+  @override void initState(){super.initState();_stockFuture=s.stock();}
+  void _refresh(){if(mounted)setState(()=>_stockFuture=s.stock());widget.onChange();}
   Future<void> add() async {
     try {
       final all=await s.stock();
       if(all.isEmpty)throw const FormatException('Add a product variation first.');
       if(!mounted)return;
       final adjusted=await showDialog<bool>(context:context,builder:(ctx)=>_StockVariationDialog(items:all));
-      if(adjusted==true)widget.onChange();
+      if(adjusted==true)_refresh();
     }catch(e){if(mounted)await showError(context,e);}
   }
-  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(
-    future:s.stock(),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
+  Future<void> edit(Map<String,Object?> v)async {
+    final quantity=numVal(v['qty']);
+    final form=await ask(context,'Edit Stock · ${v['product']}  (${v['attrs']??'Standard'})',[
+      FieldSpec('qty','Current stock in ${v['display_unit']}',initial:quantity.toString(),numeric:true),
+      FieldSpec('purchase','Purchase cost per ${v['display_unit']} (Rs.)',initial:rupees(v['purchase_price']).toStringAsFixed(2),numeric:true),
+      FieldSpec('sale','Suggested selling price per ${v['display_unit']} (Rs.)',initial:rupees(v['sale_price']).toStringAsFixed(2),numeric:true),
+      const FieldSpec('reason','Reason when changing quantity',mustFill:false),
+    ]);
+    if(form==null)return;
+    try{
+      await s.editStockDetails(v['id'] as int,purchasePrice:double.parse(form['purchase']!),
+        salePrice:double.parse(form['sale']!),targetStock:double.parse(form['qty']!),reason:form['reason']!);
+      _refresh();
+    }catch(e){if(mounted)await showError(context,e);}
+  }
+  Future<void> ledger(Map<String,Object?> v)async {
+    if(!mounted)return;
+    await showDialog<void>(context:context,builder:(ctx)=>Dialog(child:SizedBox(width:970,height:610,
+      child:Column(children:[
+        Padding(padding:const EdgeInsets.fromLTRB(20,15,12,10),child:Row(children:[
+          const Icon(Icons.menu_book_outlined,color:blue),const SizedBox(width:11),
+          Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+            const Text('Stock In / Out Ledger',style:TextStyle(fontSize:20,fontWeight:FontWeight.w800)),
+            Text('${v['product']} • ${v['attrs']??'Standard'} • ${v['display_unit']}',overflow:TextOverflow.ellipsis),
+          ])),IconButton(onPressed:()=>Navigator.pop(ctx),icon:const Icon(Icons.close))])),
+        const Divider(height:1),
+        Expanded(child:FutureBuilder<List<Map<String,Object?>>>(future:s.stockLedger(v['id'] as int),builder:(context,snap){
+          if(snap.hasError)return Center(child:Text('Could not load stock ledger: ${snap.error}'));
+          if(!snap.hasData)return const Center(child:CircularProgressIndicator());
+          if(snap.data!.isEmpty)return const Center(child:Text('No stock movements recorded yet.'));
+          String qty(Object? x)=>numVal(x).toStringAsFixed(3).replaceFirst(RegExp(r'0+$'),'').replaceFirst(RegExp(r'\.$'),'');
+          return Scrollbar(thumbVisibility:true,child:SingleChildScrollView(child:SingleChildScrollView(
+            scrollDirection:Axis.horizontal,child:DataTable(columns:const [
+              DataColumn(label:Text('Date')),DataColumn(label:Text('Type')),
+              DataColumn(label:Text('Reference')),DataColumn(label:Text('Stock In'),numeric:true),
+              DataColumn(label:Text('Stock Out'),numeric:true),DataColumn(label:Text('Balance'),numeric:true),
+              DataColumn(label:Text('Note')),
+            ],rows:[for(final row in snap.data!)DataRow(cells:[
+              DataCell(Text('${row['date']}')),DataCell(Text(_stockTypeLabel('${row['source_type']}'))),
+              DataCell(Text('${row['invoice']}'.isNotEmpty?'${row['invoice']}':'#${row['source_id']}')),DataCell(Text(qty(row['in_qty']),style:const TextStyle(color:Colors.green,fontWeight:FontWeight.w700))),
+              DataCell(Text(qty(row['out_qty']),style:const TextStyle(color:Colors.red,fontWeight:FontWeight.w700))),
+              DataCell(Text(qty(row['balance']),style:const TextStyle(fontWeight:FontWeight.w800))),
+              DataCell(SizedBox(width:180,child:Text('${row['note']}',overflow:TextOverflow.ellipsis))),
+            ])]))));
+        })),
+        Padding(padding:const EdgeInsets.all(13),child:Align(alignment:Alignment.centerRight,
+          child:TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Close')))),
+      ]))));
+  }
+  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:_stockFuture,builder:(ctx,snap){
+    if(snap.hasError)return Center(child:Text('Stock could not load: ${snap.error}'));
+    if(!snap.hasData)return const Center(child:CircularProgressIndicator());
     final all=snap.data!;
-    return pageWrap([section('Live stock balances',action:addButton('Adjust stock',add)),
-      panel(const Text('Select Product → Variation to adjust stock. Negative quantities are allowed. Purchases and sales update the same variant automatically.',style:TextStyle(color:Colors.blueGrey))),
-      listing(['Product','Variation (Size / Color / Pack)','Category','Stock Unit','Available','Status'],
-        all.map((v){final qty=numVal(v['qty']);return [txt(v['product']),
-          txt(('${v['attrs']??''}').trim().isEmpty?'Standard · ${v['package']??'Piece'}':
-          '${v['attrs']} · ${v['package']??'Piece'}'),
+    final categories={for(final v in all)'${v['category']}'}.toList()..sort();
+    final filtered=all.where((v){
+      if(categoryFilter!=null && categoryFilter!='${v['category']}')return false;
+      final text='${v['product']} ${v['category']} ${v['attrs']??''} ${v['sku']}'.toLowerCase();
+      return text.contains(search.trim().toLowerCase());
+    }).toList();
+    return pageWrap([
+      section('Live stock balances',action:addButton('Adjust stock',add)),
+      Wrap(spacing:12,runSpacing:9,children:[
+        SizedBox(width:330,child:TextField(key:const Key('stock-search'),decoration:const InputDecoration(
+          labelText:'Search Product / Size / Color / SKU',prefixIcon:Icon(Icons.search)),onChanged:(value)=>setState(()=>search=value))),
+        SizedBox(width:230,child:DropdownButtonFormField<String?>(key:ValueKey('stock-category-$categoryFilter'),
+          initialValue:categoryFilter,isExpanded:true,decoration:const InputDecoration(labelText:'Category'),
+          items:[const DropdownMenuItem<String?>(value:null,child:Text('All Categories')),
+            for(final category in categories)DropdownMenuItem<String?>(value:category,child:Text(category,overflow:TextOverflow.ellipsis))],
+          onChanged:(v)=>setState(()=>categoryFilter=v))),
+      ]),
+      panel(const Text('Each variation has its own stock ledger. Edit stock quantity and reference prices; adjustments always create traceable In / Out movements.',style:TextStyle(color:Colors.blueGrey))),
+      listing(['Product','Variation','Category','Unit','Available','Purchase Cost','Sale Price','Actions'],
+        filtered.map((v){final qty=numVal(v['qty']);return [
+          txt(v['product']),txt(('${v['attrs']??''}').trim().isEmpty?'Standard · ${v['package']??'Piece'}':
+            '${v['attrs']} · ${v['package']??'Piece'}'),
           txt(v['category']),txt(v['display_unit']),
           Text('$qty',style:TextStyle(fontWeight:FontWeight.w800,color:qty<0?Colors.red:qty==0?Colors.orange:ink)),
-          Text(qty<0?'NEGATIVE':qty==0?'EMPTY':'IN STOCK',style:TextStyle(color:qty<0?Colors.red:Colors.blueGrey,fontWeight:FontWeight.w700,fontSize:11))];}).toList())]);
+          txt(funds(v['purchase_price'])),txt(funds(v['sale_price'])),
+          buttons([small('View Ledger',()=>ledger(v),icon:Icons.menu_book_outlined),
+            small('Edit',()=>edit(v),icon:Icons.edit_outlined)]),
+        ];}).toList()),
+    ]);
   });
 }
 
@@ -797,7 +883,7 @@ class _ExpenseScreenState extends State<ExpenseScreen>{final s=Store.instance;
     final f=await ask(context,'Record an expense',[FieldSpec('category','Expense category',choices:cats),const FieldSpec('amount','Amount (Rs.)',numeric:true),FieldSpec('account','Paid from',choices:ac),FieldSpec('date','Date',initial:nowDate()),const FieldSpec('note','Description',mustFill:false)]);
     if(f!=null)await s.addExpense(int.parse(f['category']!),double.parse(f['amount']!),int.parse(f['account']!),f['note']!,f['date']!);
   }
-  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read("SELECT e.*,c.name AS category,a.name AS account,coalesce(r.id,0) AS reversed FROM expenses e JOIN expense_categories c ON c.id=e.category_id JOIN accounts a ON a.id=e.account_id LEFT JOIN reversed_transactions r ON r.kind='expense' AND r.source_id=e.id ORDER BY e.id DESC LIMIT 300"),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
+  @override Widget build(BuildContext context)=>FutureBuilder<List<Map<String,Object?>>>(future:s.read("SELECT e.*,c.name AS category,a.name AS account FROM expenses e JOIN expense_categories c ON c.id=e.category_id JOIN accounts a ON a.id=e.account_id WHERE NOT EXISTS (SELECT 1 FROM reversed_transactions r WHERE r.kind='expense' AND r.source_id=e.id) ORDER BY e.id DESC LIMIT 300"),builder:(ctx,snap){if(!snap.hasData)return const Center(child:CircularProgressIndicator());
     return pageWrap([section('Expense management',action:buttons([addButton('New category',()=>change(()async{final f=await ask(context,'Add expense category',[const FieldSpec('name','Category')]);if(f!=null)await s.db.rawInsert('INSERT INTO expense_categories(name) VALUES(?)',[f['name']]);})),addButton('Edit category',()=>change(()async{
         final categories=await options(s,'SELECT id,name FROM expense_categories ORDER BY name');
         final f=await ask(context,'Edit expense category',[FieldSpec('id','Category',choices:categories),const FieldSpec('name','New name')]);
@@ -811,7 +897,7 @@ class _ExpenseScreenState extends State<ExpenseScreen>{final s=Store.instance;
           await s.deleteExpenseCategory(int.parse(f['id']!));
         }
       }):null),addButton('New expense',()=>change(add))])),
-    listing(['Date','Category','Note','Account','Amount','Status / Action'],snap.data!.map((e)=>[txt(e['date']),txt(e['category']),txt(e['description']),txt(e['account']),txt(funds(e['amount'])),e['reversed']==0?small('Delete expense',()=>change(()async{if(await confirm(context,'Delete / reverse expense? Original will stay in the audit trail.'))await s.voidExpense(e['id'] as int);}),icon:Icons.delete_outline):txt('VOID')]).toList()),
+    listing(['Date','Category','Note','Account','Amount','Status / Action'],snap.data!.map((e)=>[txt(e['date']),txt(e['category']),txt(e['description']),txt(e['account']),txt(funds(e['amount'])),canShopAction('delete')?small('Delete expense',()=>change(()async{if(await confirm(context,'Delete / reverse expense? Original will stay in the audit trail.'))await s.voidExpense(e['id'] as int);}),icon:Icons.delete_outline):txt('No delete permission')]).toList()),
     panel(const Text('Financial corrections should use reversal journal entries, not silent deletion of posted expenses.',style:TextStyle(fontSize:12,color:Colors.blueGrey)))]);
   });
 }

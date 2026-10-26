@@ -72,7 +72,10 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
   List<Map<String,Object?>> categories=[],products=[],variants=[];
   int? filterCategory;
   String search='';
+  final ScrollController _productsScroll=ScrollController();
+  final Map<int,String?> _sizeFilters={};
   bool busy=true;
+  @override void dispose(){_productsScroll.dispose();super.dispose();}
   @override void initState(){super.initState();_reload();}
   Future<void> _reload()async{
     final results=await Future.wait([
@@ -84,8 +87,14 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
   }
   bool allow(String action)=>CommercialCore.instance.current?.allowed('Products & Variants',action)==true;
   Future<void> _run(Future<void> Function() task)async{
-    try{await task();await _reload();widget.onChange();}
-    catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not save: $e')));}
+    try{
+      await task();
+      // Refresh only this Products screen. Calling the Shell-level onChange
+      // re-keys the page and resets scroll to the FIRST product after every
+      // variation insert. Local setState preserves this ScrollController and
+      // the currently expanded product while updating the new variation.
+      await _reload();
+    }catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not save: $e')));}
   }
   Future<void> _addProduct() async {
     if(categories.isEmpty)throw const FormatException('Please add a Category first.');
@@ -235,8 +244,13 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
         FilledButton.icon(onPressed:allow('create')?()=>_run(_addProduct):null,icon:const Icon(Icons.add),label:const Text('New Product')),
       ]),const SizedBox(height:15),Expanded(child:busy?const Center(child:CircularProgressIndicator()):
       visible.isEmpty?const Center(child:Text('No products yet. Add a Category, then a Product.')):
-      ListView.separated(itemCount:visible.length,separatorBuilder:(_,__)=>const SizedBox(height:8),
+      ListView.separated(key:const PageStorageKey('products-scrolling-list'),controller:_productsScroll,itemCount:visible.length,separatorBuilder:(_,__)=>const SizedBox(height:8),
         itemBuilder:(ctx,i){final p=visible[i];final pvars=variants.where((v)=>v['product_id']==p['id']).toList();
+        final pid=p['id'] as int;
+        final sizes=pvars.map((v)=>'${v['size_label']??''}'.trim())
+          .where((size)=>size.isNotEmpty).toSet().toList()..sort();
+        final sizeFilter=sizes.contains(_sizeFilters[pid])?_sizeFilters[pid]:null;
+        final shownVars=sizeFilter==null?pvars:pvars.where((v)=>'${v['size_label']??''}'.trim()==sizeFilter).toList();
         return Card(child:ExpansionTile(key:PageStorageKey(p['id']),initiallyExpanded:visible.length==1,
           title:Text('${p['name']}',style:const TextStyle(fontWeight:FontWeight.w800,fontSize:16)),
           subtitle:Text('${p['category']} • ${pvars.length} variations'),
@@ -261,8 +275,19 @@ class _SimpleProductsScreenState extends State<SimpleProductsScreen> {
               if(yes==true)await store.deleteManagedRecord('products',p['id'] as int);
             }):null,icon:const Icon(Icons.delete_outline,size:18),label:const Text('Delete')),
           ])),const SizedBox(height:8),
+          if(sizes.isNotEmpty)Padding(padding:const EdgeInsets.fromLTRB(8,5,8,10),child:Row(children:[
+            const Icon(Icons.filter_list,size:18,color:Color(0xFF376DB0)),const SizedBox(width:9),
+            Expanded(child:DropdownButtonFormField<String?>(
+              key:ValueKey('variation-size-$pid-$sizeFilter'),initialValue:sizeFilter,isExpanded:true,
+              decoration:const InputDecoration(labelText:'Filter Variations by Size',isDense:true),
+              items:[const DropdownMenuItem<String?>(value:null,child:Text('All Sizes')),
+                for(final size in sizes)DropdownMenuItem<String?>(value:size,child:Text(size,overflow:TextOverflow.ellipsis))],
+              onChanged:(v)=>setState(()=>_sizeFilters[pid]=v))),
+            const SizedBox(width:10),Text('${shownVars.length} / ${pvars.length}',
+              style:const TextStyle(fontSize:12,fontWeight:FontWeight.w600,color:Colors.blueGrey)),
+          ])),
           if(pvars.isEmpty)const Padding(padding:EdgeInsets.all(13),child:Text('No variation. Add a Standard variation or enter Size/Color.')),
-          for(final v in pvars)ListTile(dense:true,
+          for(final v in shownVars)ListTile(dense:true,
             leading:const CircleAvatar(radius:17,child:Icon(Icons.style_outlined,size:17)),
             title:Text(('${v['attrs']??''}').trim().isEmpty?'Standard':'${v['attrs']}',style:const TextStyle(fontWeight:FontWeight.w600)),
             subtitle:Text('Stock: ${numVal(v['qty']).toStringAsFixed(numVal(v['qty'])%1==0?0:2)} ${v['display_unit']=='Table Sheets'?'Table Sheets':v['unit']=='ft'?'Feet':'Pieces'} • ${v['package']??'Single Piece'}'),

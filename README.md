@@ -1,3 +1,7 @@
+# ShopDesk Pro v0.9.15 — Stock Ledger, Price Edit, Expense Delete, Variation UX
+
+Latest source changes and safe SQLite migrations: see [UPGRADE_V0_9_15_STOCK_EXPENSE_VARIATIONS.md](UPGRADE_V0_9_15_STOCK_EXPENSE_VARIATIONS.md). Flutter/Windows compilation is not verified in this environment. Test on a backup database before production use.
+
 # ShopDesk Pro v0.9.14 — POS-Style Sale/Purchase Returns
 
 See [UPGRADE_V0_9_14_RETURN_POS_AND_INVOICE_QTY.md](UPGRADE_V0_9_14_RETURN_POS_AND_INVOICE_QTY.md). This update adds full-invoice and selected-item returns, invoice-line variation and unit visibility, and original/returned/remaining quantities on invoices and reports. Flutter/Windows build **not yet verified**; use GitHub Actions.
